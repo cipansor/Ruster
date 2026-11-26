@@ -748,7 +748,7 @@ impl<'a> FnCompiler<'a> {
                 let branch_depth = self.depth;
                 self.compile_block_discard(then_b)?;
                 let then_depth = self.depth;
-                let then_div = block_diverges(then_b);
+                let then_reaches = block_reaches_end(then_b);
                 let jend = self.emit_jump(Op::Jump(0));
                 let else_start = self.here();
                 self.patch(jf, else_start);
@@ -757,8 +757,7 @@ impl<'a> FnCompiler<'a> {
                     self.compile_expr_discard(els)?;
                 }
                 let else_depth = self.depth;
-                let else_div = else_b.as_ref().map(|e| diverges(e)).unwrap_or(false);
-                self.depth = if then_div && !else_div { else_depth } else { then_depth };
+                self.depth = if then_reaches { then_depth } else { else_depth };
                 let end = self.here();
                 self.patch(jend, end);
                 Ok(())
@@ -979,7 +978,7 @@ impl<'a> FnCompiler<'a> {
                 let branch_depth = self.depth;
                 self.compile_block(then_b)?;
                 let then_depth = self.depth;
-                let then_div = block_diverges(then_b);
+                let then_reaches = block_reaches_end(then_b);
                 let jend = self.emit_jump(Op::Jump(0));
                 let else_start = self.here();
                 self.patch(jf, else_start);
@@ -992,10 +991,9 @@ impl<'a> FnCompiler<'a> {
                     }
                 }
                 let else_depth = self.depth;
-                let else_div = else_b.as_ref().map(|e| diverges(e)).unwrap_or(false);
-                // Only the branch that can fall through determines the stack
+                // Only a branch that can fall through determines the stack
                 // shape after the `if`.
-                self.depth = if then_div && !else_div { else_depth } else { then_depth };
+                self.depth = if then_reaches { then_depth } else { else_depth };
                 let end = self.here();
                 self.patch(jend, end);
             }
@@ -1016,12 +1014,17 @@ impl<'a> FnCompiler<'a> {
                 let end = self.here();
                 self.patch(jf, end);
                 let ctx = self.loops.pop().unwrap();
+                let base = ctx.base_depth;
                 for j in ctx.breaks {
                     self.patch(j, end);
                 }
                 for j in ctx.continues {
                     self.patch(j, start_addr);
                 }
+                // Exit paths (false condition, break) leave exactly the operands
+                // that were live before the loop; a body containing `return`
+                // resets the tracked depth, so restore it here.
+                self.depth = base;
                 self.emit(Op::Unit);
             }
             Expr::Loop { body, .. } => {
@@ -1041,12 +1044,14 @@ impl<'a> FnCompiler<'a> {
                 self.emit(Op::Jump(start));
                 let end = self.here();
                 let ctx = self.loops.pop().unwrap();
+                let base = ctx.base_depth;
                 for j in ctx.breaks {
                     self.patch(j, end);
                 }
                 for j in ctx.continues {
                     self.patch(j, start);
                 }
+                self.depth = base;
                 self.emit(Op::Load(tmp));
             }
             Expr::For { pat, iter, body, .. } => self.compile_for(pat, iter, body)?,
@@ -1339,12 +1344,14 @@ impl<'a> FnCompiler<'a> {
                 let end_addr = self.here();
                 self.patch(exit, end_addr);
                 let ctx = self.loops.pop().unwrap();
+                let base = ctx.base_depth;
                 for j in ctx.breaks {
                     self.patch(j, end_addr);
                 }
                 for j in ctx.continues {
                     self.patch(j, incr);
                 }
+                self.depth = base;
                 self.emit(Op::Unit);
             }
             other => {
@@ -1385,12 +1392,14 @@ impl<'a> FnCompiler<'a> {
                 let end_addr = self.here();
                 self.patch(exit, end_addr);
                 let ctx = self.loops.pop().unwrap();
+                let base = ctx.base_depth;
                 for j in ctx.breaks {
                     self.patch(j, end_addr);
                 }
                 for j in ctx.continues {
                     self.patch(j, incr);
                 }
+                self.depth = base;
                 self.emit(Op::Unit);
             }
         }
@@ -1876,6 +1885,37 @@ fn block_diverges(b: &Block) -> bool {
         .last()
         .map(|s| matches!(s, Stmt::Expr { expr, semi: false } if diverges(expr)))
         .unwrap_or(false)
+}
+
+/// Whether control can reach the end of a statement. Unlike the `diverges`
+/// family (which models stack shape and therefore cares whether a statement
+/// produces a value), a semicolon does not make a `break`/`return` fall
+/// through: `break value;` still transfers control.
+fn stmt_reaches_end(s: &Stmt) -> bool {
+    match s {
+        Stmt::Expr { expr, .. } => reaches_end(expr),
+        Stmt::Let { init: Some(e), .. } => reaches_end(e),
+        Stmt::Let { init: None, .. } => true,
+    }
+}
+
+fn block_reaches_end(b: &Block) -> bool {
+    b.stmts.iter().all(stmt_reaches_end)
+}
+
+fn reaches_end(e: &Expr) -> bool {
+    match e {
+        Expr::Return(_) | Expr::Break(_) | Expr::Continue => false,
+        Expr::Macro { name, .. } => !matches!(
+            name.as_str(),
+            "panic" | "unreachable" | "todo" | "unimplemented"
+        ),
+        Expr::Block(b) => block_reaches_end(b),
+        Expr::If { then_b, else_b, .. } => {
+            block_reaches_end(then_b) || else_b.as_ref().map(|e| reaches_end(e)).unwrap_or(true)
+        }
+        _ => true,
+    }
 }
 
 fn diverges(e: &Expr) -> bool {

@@ -24,7 +24,14 @@ fn odd(n: i64) -> i64 {
     }
 }
 
+// Acyclic: this one must still be JIT-compiled, which keeps the fallback check
+// below from passing vacuously.
+fn leaf(x: i64) -> i64 {
+    x + 1
+}
+
 fn main() {
     println!("{}", down(100_000));
     println!("{} {}", even(10_000), odd(10_001));
+    println!("{}", leaf(4));
 }
