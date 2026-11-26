@@ -1,8 +1,16 @@
+# Ruster CI.
+#
+# Everything is built with plain `rustc` (the project deliberately has no cargo
+# manifest and no crates), so there is nothing to cache: the toolchain comes
+# with the runner image.
+#
+# Repository policy: every `uses:` must be pinned to a full-length commit SHA.
 name: CI
 
 on:
   push:
     branches: [main, minirust]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -10,52 +18,188 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  RUST_BACKTRACE: "1"
+  PYTHONUNBUFFERED: "1"
+
 jobs:
-  build-and-test:
-    name: build (${{ matrix.os }}) + differential tests
+  build:
+    name: build / ${{ matrix.os }} / ${{ matrix.toolchain }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: ubuntu-latest
+            toolchain: beta
+          - os: macos-latest
+            toolchain: stable
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Ensure toolchain
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal && rustc +${{ matrix.toolchain }} --version
+      - name: Build (warnings are errors)
+        run: |
+          mkdir -p bin
+          rustc +${{ matrix.toolchain }} --edition 2021 -O -D warnings ruster/src/main.rs -o bin/rust
+          ./bin/rust --version
+          ls -l bin/rust
+      - name: Upload interpreter binary
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: ruster-${{ matrix.os }}-${{ matrix.toolchain }}
+          path: bin/rust
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Toolchain
-        run: rustc --version && python3 --version
+  test:
+    name: test / ${{ matrix.os }} / ${{ matrix.toolchain }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: ubuntu-latest
+            toolchain: beta
+          - os: macos-latest
+            toolchain: stable
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Ensure toolchain
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+      - name: Build
+        run: |
+          mkdir -p bin
+          rustc +${{ matrix.toolchain }} --edition 2021 -O ruster/src/main.rs -o bin/rust
+      - name: Repository hygiene
+        run: python3 tests/hygiene.py
+      - name: Differential tests vs rustc (JIT and --no-jit)
+        run: python3 tests/compare.py
+      - name: Error cases (panic and process::exit)
+        run: python3 tests/errors.py
+      - name: JIT must never change observable behaviour
+        run: |
+          for f in tests/programs/*.rs; do
+            diff -u <(./bin/rust "$f") <(./bin/rust --no-jit "$f") || { echo "JIT divergence: $f"; exit 1; }
+          done
+      - name: Front-end and JIT statistics
+        run: |
+          for f in bench/programs/*.rs; do echo "== $f"; ./bin/rust --stats "$f" >/dev/null; done
+      - name: Toolchain info
+        if: always()
+        run: rustc +${{ matrix.toolchain }} -vV && python3 --version
 
-      - name: Build Ruster (single binary, no cargo, no crates)
+  lint:
+    name: lint (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: clippy (single-file, no cargo)
+        continue-on-error: true
+        run: |
+          rustup component add clippy
+          clippy-driver --edition 2021 -O ruster/src/main.rs -o /tmp/ruster-clippy 2>&1 | tee clippy.log
+          grep -c "^warning" clippy.log || true
+      - name: rustfmt --check (informational)
+        continue-on-error: true
+        run: rustfmt --edition 2021 --check ruster/src/*.rs
+      - name: Python syntax
+        run: python3 -m py_compile tests/*.py bench/*.py
+      - name: Workflow lint
+        continue-on-error: true
+        run: pip install --quiet pyyaml && python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/ci.yml')); print('workflow yaml ok')"
+      - name: MSRV probe (informational)
+        continue-on-error: true
+        run: |
+          rustup toolchain install 1.75.0 --profile minimal
+          mkdir -p /tmp/msrv && rustc +1.75.0 --edition 2021 -O ruster/src/main.rs -o /tmp/msrv/rust
+          /tmp/msrv/rust --version
+
+  bench:
+    name: benchmark (ubuntu, informational)
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build
         run: |
           mkdir -p bin
           rustc --edition 2021 -O ruster/src/main.rs -o bin/rust
-          ls -lh bin/rust
-
-      - name: Smoke test
-        run: |
-          ./bin/rust --version
-          printf 'fn main() { println!("{}", 6 * 7); }\n' > /tmp/smoke.rs
-          ./bin/rust /tmp/smoke.rs | grep -qx 42
-
-      - name: Differential tests vs rustc
-        run: python3 tests/compare.py
-
-      - name: Error-case tests (panic/exit codes)
-        run: python3 tests/errors.py
-
-      - name: Benchmark (informational, ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        continue-on-error: true
-        run: python3 bench/bench.py --runs 3 --compile-runs 3
-
+      - name: Baseline (from the committed results)
+        run: git show HEAD:bench/results.json > /tmp/baseline.json
+      - name: Run benchmarks
+        run: python3 bench/bench.py --runs 5 --compile-runs 5
+      - name: Compare with baseline and publish summary
+        run: python3 tests/bench_report.py /tmp/baseline.json bench/results.json
       - name: Upload benchmark report
-        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: bench-results
           path: |
             bench/results.md
             bench/results.json
-          if-no-files-found: ignore
+          if-no-files-found: error
+
+  release:
+    name: release (${{ matrix.suffix }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            suffix: linux-x86_64
+          - os: macos-latest
+            suffix: macos-arm64
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build release binary
+        run: |
+          rustc --edition 2021 -O -D warnings ruster/src/main.rs -o ruster-${{ matrix.suffix }}
+          strip ruster-${{ matrix.suffix }} || true
+          ./ruster-${{ matrix.suffix }} --version
+          shasum -a 256 ruster-${{ matrix.suffix }} | tee ruster-${{ matrix.suffix }}.sha256
+      - name: Attach to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" "ruster-${{ matrix.suffix }}" "ruster-${{ matrix.suffix }}.sha256" --clobber
+
+  ci:
+    name: ci
+    if: always()
+    needs: [build, test, lint, bench]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate results
+        run: |
+          echo "build: ${{ needs.build.result }}"
+          echo "test: ${{ needs.test.result }}"
+          echo "lint: ${{ needs.lint.result }}"
+          echo "bench: ${{ needs.bench.result }}"
+          for r in "${{ needs.build.result }}" "${{ needs.test.result }}" "${{ needs.bench.result }}"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "::error::required job finished with '$r'"
+              exit 1
+            fi
+          done
+          echo "all required jobs are green"
