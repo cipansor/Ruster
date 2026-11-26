@@ -346,8 +346,9 @@ Because `rustc -O` takes 74–126 ms per program, Ruster wins end-to-end for
 short-running programs — including the 10-million-iteration loop and the string
 benchmark. It loses on `fib` (interpreter-only) and on `Vec`/index-heavy code.
 
-Parity is enforced: the harness runs each benchmark under native `rustc`, the
-JIT, and `--no-jit` and requires identical stdout and exit codes. A mismatch
+The harness enforces two independent checks: the captured comparison (native,
+JIT, and `--no-jit` must print the same stdout and exit with the same code) and
+the timed runs (every measured run must exit 0). A failure in either check
 fails the run, but CI still publishes the report and the per-program summary.
 
 ### 4.5 Size and memory

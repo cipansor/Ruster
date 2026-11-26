@@ -189,6 +189,10 @@ def main():
         jit_run = summarize(jit_runs)
         interp_run = summarize(interp_runs)
         front_end = summarize(fe_rows)
+        timed_ok = (
+            native_run["codes"] == jit_run["codes"] == interp_run["codes"]
+            and all(code == 0 for code in native_run["codes"])
+        )
 
         entry = {
             "name": name,
@@ -209,12 +213,9 @@ def main():
             "jit_speedup": interp_run["wall"] / jit_run["wall"]
             if jit_run["wall"] > 0
             else None,
+            "timed_ok": timed_ok,
             "native_parity": stdout_ok,
-            "code_match": (
-                native_run["codes"] == jit_run["codes"] == interp_run["codes"]
-                and all(code == 0 for code in native_run["codes"])
-                and stdout_ok
-            ),
+            "code_match": timed_ok and stdout_ok,
         }
         results["programs"].append(entry)
         print(
@@ -233,8 +234,16 @@ def main():
         f.write(md)
     print("\n" + md)
     print(f"\nwrote {RESULTS_JSON} and {RESULTS_MD}")
-    if not all(p["code_match"] for p in results["programs"]):
-        print("ERROR: benchmark stdout/exit-code parity failed", file=sys.stderr)
+    timed_bad = [p["name"] for p in results["programs"] if not p["timed_ok"]]
+    parity_bad = [p["name"] for p in results["programs"] if not p["native_parity"]]
+    if timed_bad:
+        print(f"ERROR: timed runs failed for: {', '.join(timed_bad)}", file=sys.stderr)
+    if parity_bad:
+        print(
+            f"ERROR: captured stdout/exit parity failed for: {', '.join(parity_bad)}",
+            file=sys.stderr,
+        )
+    if timed_bad or parity_bad:
         return 1
     return 0
 
@@ -355,6 +364,21 @@ def render_markdown(res):
         f"\nGeometric-mean runtime slowdown across the {n} programs: "
         f"**{geo:.1f}x** with the JIT, **{interp_geo:.1f}x** interpreter-only.\n"
     )
+    timed_vals = [p.get("timed_ok") for p in res["programs"]]
+    timed_failed = [p["name"] for p in res["programs"] if p.get("timed_ok") is False]
+    if all(v is True for v in timed_vals):
+        timed = "Timed runs: every engine exited 0 in all measured runs."
+    elif timed_failed:
+        timed = (
+            f"Timed runs FAILED for: {', '.join(timed_failed)} "
+            "(nonzero exit in a measured run; those timings are invalid)."
+        )
+    else:
+        timed = (
+            "Timed runs: not recorded in this report (legacy format); re-run "
+            "`bench.py` to verify."
+        )
+    lines.append(timed + "\n")
     vals = [p.get("native_parity") for p in res["programs"]]
     failed = [p["name"] for p in res["programs"] if p.get("native_parity") is False]
     if all(v is True for v in vals):

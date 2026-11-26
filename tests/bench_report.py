@@ -70,19 +70,28 @@ def main():
     cur_e2e = geo([c["e2e"] for c in cur.values()])
     base_runtime = geo([b["runtime"] for b in base.values()])
     vals = [r.get("native_parity") for r in cur_rows]
-    failed = [r["name"] for r in cur_rows if r.get("native_parity") is False]
+    parity_failed = [r["name"] for r in cur_rows if r.get("native_parity") is False]
     if all(v is True for v in vals):
         parity = "verified"
-    elif failed:
-        parity = f"FAILED ({', '.join(failed)})"
+    elif parity_failed:
+        parity = f"FAILED ({', '.join(parity_failed)})"
     else:
         parity = "not recorded (legacy report)"
+    timed_vals = [r.get("timed_ok") for r in cur_rows]
+    timed_failed = [r["name"] for r in cur_rows if r.get("timed_ok") is False]
+    if all(v is True for v in timed_vals):
+        timed = "verified"
+    elif timed_failed:
+        timed = f"FAILED ({', '.join(timed_failed)})"
+    else:
+        timed = "not recorded (legacy report)"
     lines += [
         "",
         f"- geometric mean runtime slowdown: **{cur_runtime:.1f}x** (baseline {base_runtime:.1f}x)",
         f"- geometric mean end-to-end (compile + run): **{cur_e2e:.2f}x** of rustc",
         f"- programs won end-to-end: **{sum(1 for c in cur.values() if c['e2e'] < 1)}** / {len(cur)}",
-        f"- parity (native / JIT / no-JIT stdout+exit): **{parity}**",
+        f"- timed runs (all engines exited 0): **{timed}**",
+        f"- captured parity (native / JIT / no-JIT stdout+exit): **{parity}**",
         "",
     ]
 
@@ -96,8 +105,13 @@ def main():
     for name, delta in regressions:
         print(f"::warning::{name} is {delta:.2f}x slower than the committed baseline")
 
-    if failed:
-        print(f"::error::benchmark stdout/exit-code parity failed for: {', '.join(failed)}")
+    if timed_failed:
+        print(f"::error::benchmark timed runs failed for: {', '.join(timed_failed)}")
+    if parity_failed:
+        print(
+            "::error::benchmark captured stdout/exit parity failed for: "
+            + ", ".join(parity_failed)
+        )
 
 
 if __name__ == "__main__":

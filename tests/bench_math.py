@@ -7,13 +7,19 @@ is for the compile-phase table only, so both benchmark reporters must use the
 full invocation as the end-to-end Ruster time.
 
 The fixtures give the JIT and the interpreter *different* wall times, so a
-renderer that silently picks the wrong engine cannot pass. They also cover the
-legacy-report case: an old report has no `native_parity` field, so it must not
-claim that native stdout was verified.
+renderer that silently picks the wrong engine cannot pass. They also cover:
+
+  * a legacy report (no `native_parity` / `timed_ok`) must not claim success;
+  * a captured parity failure must be named;
+  * a timed-run failure must be named even when the captured comparison passes,
+    because the timing for that program is not valid.
 """
 import importlib.util
+import json
 import os
+import subprocess
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -25,7 +31,7 @@ def load(name, path):
     return mod
 
 
-def fixture(native_parity="present"):
+def fixture(native_parity="present", timed_ok=True):
     """One synthetic program; JIT = 0.1 ms, interpreter = 0.9 ms."""
     entry = {
         "name": "x",
@@ -55,7 +61,7 @@ def fixture(native_parity="present"):
             "rss_kb": 100,
             "cpu_pct": 100.0,
             "runs": 1,
-            "codes": [0],
+            "codes": [0] if timed_ok else [1],
         },
         "interp_run": {
             "wall": 0.0009,
@@ -68,12 +74,17 @@ def fixture(native_parity="present"):
         "slowdown": 0.5,
         "interp_slowdown": 4.5,
         "jit_speedup": 9.0,
-        "code_match": True,
+        "timed_ok": timed_ok,
     }
     if native_parity == "present":
         entry["native_parity"] = True
     elif native_parity == "false":
         entry["native_parity"] = False
+    elif native_parity == "missing":
+        entry.pop("timed_ok", None)
+    entry["code_match"] = entry.get("timed_ok", True) and entry.get(
+        "native_parity", True
+    )
     return {
         "meta": {
             "date": "x",
@@ -87,6 +98,28 @@ def fixture(native_parity="present"):
         },
         "programs": [entry],
     }
+
+
+def report_summary(data):
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(data, f)
+        path = f.name
+    try:
+        return subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tests", "bench_report.py"), path, path],
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        os.unlink(path)
+
+
+def expect(text, needles, label, failed):
+    for needle in needles:
+        if needle not in text:
+            print(f"FAIL {label}: missing {needle!r}")
+            failed += 1
+    return failed
 
 
 def main():
@@ -123,40 +156,88 @@ def main():
 
     # 3. The JIT (0.1 ms) must be selected, never the interpreter (0.9 ms).
     md = bench.render_markdown(fixture())
-    checks = [
-        ("| x | 1.2 ms | 0.1 ms |", "end-to-end uses the JIT run"),
-        (
+    failed = expect(
+        md,
+        [
+            "| x | 1.2 ms | 0.1 ms |",
             "| x | 0.2 ms | 0.2 ms | 100% | 0.1 MB | 0.1 ms |",
-            "runtime table uses the JIT run",
-        ),
-        ("| x | 0.9 ms | 0.1 ms | 9.00x |", "JIT-effect table shows both engines"),
-    ]
-    for needle, what in checks:
-        if needle not in md:
-            print(f"FAIL {what}: missing {needle!r}")
-            failed += 1
+            "| x | 0.9 ms | 0.1 ms | 9.00x |",
+            "Timed runs: every engine exited 0 in all measured runs.",
+            "Parity: native `rustc`, Ruster (JIT), and Ruster `--no-jit` "
+            "produced identical stdout and exit code for every benchmark program.",
+        ],
+        "clean report",
+        failed,
+    )
     e2e = md.split("## End-to-end", 1)[-1]
     if "0.9 ms" in e2e:
         print("FAIL end-to-end section contains the interpreter time")
         failed += 1
 
-    # 4. A legacy report (no `native_parity`) must not claim verification.
+    # 4. A legacy report (no native_parity / timed_ok) must not claim success.
     legacy = bench.render_markdown(fixture(native_parity="missing"))
-    if "not recorded in this report (legacy format)" not in legacy:
-        print("FAIL legacy report claims native parity was verified")
-        failed += 1
-    if "produced identical stdout and exit code for every benchmark program" in legacy:
-        print("FAIL legacy report claims native parity was verified")
-        failed += 1
+    failed = expect(
+        legacy,
+        [
+            "Timed runs: not recorded in this report (legacy format)",
+            "Parity: not recorded in this report (legacy format)",
+        ],
+        "legacy report",
+        failed,
+    )
 
-    # 5. An explicit native mismatch must be named.
-    bad = bench.render_markdown(fixture(native_parity="false"))
-    if "Parity FAILED for: x." not in bad:
-        print("FAIL native parity failure is not reported")
-        failed += 1
+    # 5. Captured parity failure: name it; timed runs are still fine.
+    parity_bad = bench.render_markdown(fixture(native_parity="false"))
+    failed = expect(
+        parity_bad,
+        [
+            "Parity FAILED for: x.",
+            "Timed runs: every engine exited 0 in all measured runs.",
+        ],
+        "parity failure",
+        failed,
+    )
+
+    # 6. Timed-run failure with a passing captured comparison: name the timed
+    #    failure, but keep the captured parity verified.
+    timed_bad = bench.render_markdown(fixture(timed_ok=False))
+    failed = expect(
+        timed_bad,
+        [
+            "Timed runs FAILED for: x (nonzero exit in a measured run; those timings are invalid).",
+            "Parity: native `rustc`, Ruster (JIT), and Ruster `--no-jit` "
+            "produced identical stdout and exit code for every benchmark program.",
+        ],
+        "timed failure",
+        failed,
+    )
+
+    # 7. The CI summary must distinguish the two checks too.
+    out = report_summary(fixture(timed_ok=False))
+    failed = expect(
+        out.stdout,
+        [
+            "- timed runs (all engines exited 0): **FAILED (x)**",
+            "- captured parity (native / JIT / no-JIT stdout+exit): **verified**",
+            "::error::benchmark timed runs failed for: x",
+        ],
+        "bench_report timed failure",
+        failed,
+    )
+    out = report_summary(fixture(native_parity="false"))
+    failed = expect(
+        out.stdout,
+        [
+            "- timed runs (all engines exited 0): **verified**",
+            "- captured parity (native / JIT / no-JIT stdout+exit): **FAILED (x)**",
+            "::error::benchmark captured stdout/exit parity failed for: x",
+        ],
+        "bench_report parity failure",
+        failed,
+    )
 
     if failed == 0:
-        print("ok   benchmark arithmetic, engine choice, and parity labels")
+        print("ok   benchmark arithmetic, engine choice, and both parity checks")
     return 1 if failed else 0
 
 
