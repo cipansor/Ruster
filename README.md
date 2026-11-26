@@ -127,7 +127,13 @@ end-to-end time, so the front-end is not counted twice.
 ```bash
 python3 bench/bench.py --runs 5 --compile-runs 5
 # writes bench/results.md and bench/results.json
+
+# a subset: an unmatched name is rejected before anything is written
+python3 bench/bench.py --only hello,fib --runs 5
 ```
+
+An unmatched `--only` exits before building or overwriting the reports, so a
+typo cannot replace the saved results with an empty run.
 
 The harness uses Python only for measurement (`fork`/`exec` + `os.wait4`); it is
 not part of the runtime. Each program is measured three ways: native, Ruster

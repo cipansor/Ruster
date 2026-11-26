@@ -17,6 +17,7 @@ renderer that silently picks the wrong engine cannot pass. They also cover:
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -100,21 +101,31 @@ def fixture(native_parity="present", timed_ok=True):
     }
 
 
-def report_summary(data):
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+def write_json(data):
+    f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    try:
         json.dump(data, f)
-        path = f.name
+        return f.name
+    finally:
+        f.close()
+
+
+def report_summary(data, baseline=None):
+    cur_path = write_json(data)
+    base_path = write_json(baseline) if baseline is not None else cur_path
     env = os.environ.copy()
     env.pop("GITHUB_STEP_SUMMARY", None)
     try:
         return subprocess.run(
-            [sys.executable, os.path.join(ROOT, "tests", "bench_report.py"), path, path],
+            [sys.executable, os.path.join(ROOT, "tests", "bench_report.py"), base_path, cur_path],
             capture_output=True,
             text=True,
             env=env,
         )
     finally:
-        os.unlink(path)
+        os.unlink(cur_path)
+        if base_path != cur_path:
+            os.unlink(base_path)
 
 
 def expect(text, needles, label, failed):
@@ -217,6 +228,14 @@ def main():
         failed,
     )
 
+    empty = bench.render_markdown({**fixture(), "programs": []})
+    if "No benchmark programs were selected." not in empty:
+        print("FAIL empty report does not say no programs were selected")
+        failed += 1
+    if "Timed runs:" in empty or "Parity:" in empty:
+        print("FAIL empty report claims the checks passed")
+        failed += 1
+
     # 7. The CI summary must distinguish the two checks too, and must exclude
     #    the failed timing from the geometric means and win count.
     out = report_summary(fixture(timed_ok=False))
@@ -263,6 +282,59 @@ def main():
         else:
             os.environ["GITHUB_STEP_SUMMARY"] = previous
         os.unlink(summary_path)
+
+    # 9. A benchmark with no baseline entry still counts in the standalone
+    #    end-to-end mean and win count.
+    base_entry = fixture()["programs"][0]
+    new_entry = json.loads(json.dumps(base_entry))
+    new_entry["name"] = "y"
+    current = {**fixture(), "programs": [base_entry, new_entry]}
+    baseline = {**fixture(), "programs": [base_entry]}
+    out = report_summary(current, baseline)
+    failed = expect(
+        out.stdout,
+        [
+            "| y | 0.1 ms | 0.5x | new | 1.00x |",
+            "- geometric mean end-to-end (compile + run): **0.08x** of rustc",
+            "- programs won end-to-end: **2** / 2",
+        ],
+        "unpaired benchmark",
+        failed,
+    )
+
+    # 10. An unmatched --only must fail before overwriting the reports.
+    results_json = os.path.join(ROOT, "bench", "results.json")
+    results_md = os.path.join(ROOT, "bench", "results.md")
+    backup_json = results_json + ".bak"
+    backup_md = results_md + ".bak"
+    shutil.copy2(results_json, backup_json)
+    shutil.copy2(results_md, backup_md)
+    env = os.environ.copy()
+    env.pop("MINIRUST_NO_JIT", None)
+    try:
+        out = subprocess.run(
+            [
+                sys.executable,
+                os.path.join(ROOT, "bench", "bench.py"),
+                "--only",
+                "__none__",
+                "--no-build",
+                "--runs",
+                "1",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if out.returncode == 0:
+            print("FAIL unmatched --only exited zero")
+            failed += 1
+        if "no benchmark matched" not in out.stderr:
+            print("FAIL unmatched --only did not explain the mismatch")
+            failed += 1
+    finally:
+        shutil.move(backup_json, results_json)
+        shutil.move(backup_md, results_md)
 
     if failed == 0:
         print("ok   benchmark arithmetic, engine choice, and both parity checks")

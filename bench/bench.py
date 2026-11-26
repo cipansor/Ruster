@@ -132,6 +132,11 @@ def main():
     check_environment()
     only = set(args.only.split(",")) if args.only else None
     cases = [c for c in CASES if not only or c[0] in only]
+    if not cases:
+        sys.exit(
+            f"no benchmark matched --only={args.only!r}; "
+            f"known: {', '.join(c[0] for c in CASES)}"
+        )
 
     build_row = None
     if not args.no_build:
@@ -261,6 +266,8 @@ def fmt_bytes(n):
 
 
 def render_markdown(res):
+    if not res["programs"]:
+        return "# Ruster benchmark results\n\nNo benchmark programs were selected.\n"
     meta = res["meta"]
     lines = []
     lines.append("# Ruster benchmark results\n")

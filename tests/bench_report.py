@@ -65,20 +65,24 @@ def main():
             lines.append(f"| {name} :x: | — | — | — | — |")
             continue
         b = base.get(name)
-        delta = c["runtime"] / b["runtime"] if b and b["runtime"] else float("nan")
-        flag = ""
-        if delta == delta and delta > WORSE_THRESHOLD:
-            flag = " :warning:"
-            regressions.append((name, delta))
+        if b is None:
+            delta_text = "new"
+        else:
+            delta = c["runtime"] / b["runtime"] if b["runtime"] else float("nan")
+            delta_text = f"{delta:.2f}x"
+            if delta == delta and delta > WORSE_THRESHOLD:
+                delta_text += " :warning:"
+                regressions.append((name, delta))
         lines.append(
-            f"| {name} | {c['ms']:.1f} ms | {c['runtime']:.1f}x | {delta:.2f}x{flag} | {c['rss']:.2f}x |"
+            f"| {name} | {c['ms']:.1f} ms | {c['runtime']:.1f}x | {delta_text} | {c['rss']:.2f}x |"
         )
 
-    valid = [name for name in cur if name in base and name not in timed_bad]
-    cur_runtime = geo([cur[n]["runtime"] for n in valid]) if valid else float("nan")
-    cur_e2e = geo([cur[n]["e2e"] for n in valid]) if valid else float("nan")
-    base_runtime = geo([base[n]["runtime"] for n in valid]) if valid else float("nan")
-    wins = sum(1 for n in valid if cur[n]["e2e"] < 1)
+    standalone = [name for name in cur if name not in timed_bad]
+    paired = [name for name in standalone if name in base]
+    cur_runtime = geo([cur[n]["runtime"] for n in paired]) if paired else float("nan")
+    base_runtime = geo([base[n]["runtime"] for n in paired]) if paired else float("nan")
+    cur_e2e = geo([cur[n]["e2e"] for n in standalone]) if standalone else float("nan")
+    wins = sum(1 for n in standalone if cur[n]["e2e"] < 1)
     vals = [r.get("native_parity") for r in cur_rows]
     parity_failed = [r["name"] for r in cur_rows if r.get("native_parity") is False]
     if all(v is True for v in vals):
@@ -99,7 +103,7 @@ def main():
         "",
         f"- geometric mean runtime slowdown: **{fmt_x(cur_runtime, 1)}** (baseline {fmt_x(base_runtime, 1)})",
         f"- geometric mean end-to-end (compile + run): **{fmt_x(cur_e2e, 2)}** of rustc",
-        f"- programs won end-to-end: **{wins}** / {len(valid)}",
+        f"- programs won end-to-end: **{wins}** / {len(standalone)}",
         f"- timed runs (all engines exited 0): **{timed}**",
         f"- captured parity (native / JIT / no-JIT stdout+exit): **{parity}**",
     ]
