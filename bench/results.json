@@ -1,0 +1,467 @@
+{
+  "meta": {
+    "date": "2026-11-26T13:55:44",
+    "host": "Linux-6.8.0-1055-gke-x86_64-with-glibc2.41",
+    "cpu_count": 4,
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "interpreter_size_bytes": 5079024,
+    "interpreter_build": {
+      "wall": 1.8866199160001997,
+      "cpu": 5.206243,
+      "rss_kb": 245128,
+      "code": 0
+    },
+    "runs": 5,
+    "compile_runs": 5
+  },
+  "programs": [
+    {
+      "name": "hello",
+      "description": "hello world + one format arg",
+      "source_bytes": 62,
+      "native_compile": {
+        "wall": 0.07595663800020702,
+        "cpu": 0.08928,
+        "rss_kb": 96896,
+        "cpu_pct": 117.54074739294893,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_size_bytes": 4492440,
+      "front_end": {
+        "wall": 0.0009897600011754548,
+        "cpu": 0.000917,
+        "rss_kb": 16000,
+        "cpu_pct": 92.64872281269763,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_run": {
+        "wall": 0.0008499800005665747,
+        "cpu": 0.0007689999999999999,
+        "rss_kb": 16000,
+        "cpu_pct": 90.47271694479922,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "interp_run": {
+        "wall": 0.0010170389996346785,
+        "cpu": 0.000928,
+        "rss_kb": 16000,
+        "cpu_pct": 91.245271846344,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "slowdown": 1.1965446233520158,
+      "code_match": true
+    },
+    {
+      "name": "fib",
+      "description": "naive recursive fib(30), 1.6M calls",
+      "source_bytes": 156,
+      "native_compile": {
+        "wall": 0.07634293799856096,
+        "cpu": 0.09187999999999999,
+        "rss_kb": 97100,
+        "cpu_pct": 120.3516689411821,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_size_bytes": 4493128,
+      "front_end": {
+        "wall": 0.001048878999426961,
+        "cpu": 0.000968,
+        "rss_kb": 16000,
+        "cpu_pct": 92.28900574125824,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_run": {
+        "wall": 0.0029902890000812477,
+        "cpu": 0.002901,
+        "rss_kb": 16000,
+        "cpu_pct": 97.01403442681219,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "interp_run": {
+        "wall": 0.23335893300099997,
+        "cpu": 0.233116,
+        "rss_kb": 16000,
+        "cpu_pct": 99.8958972781218,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "slowdown": 78.03892299194476,
+      "code_match": true
+    },
+    {
+      "name": "loop_sum",
+      "description": "10M-iteration while loop with mod/mul/add",
+      "source_bytes": 196,
+      "native_compile": {
+        "wall": 0.07858222700087936,
+        "cpu": 0.09290699999999999,
+        "rss_kb": 92800,
+        "cpu_pct": 118.22902397378014,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_size_bytes": 4493120,
+      "front_end": {
+        "wall": 0.0011645699996734038,
+        "cpu": 0.001059,
+        "rss_kb": 16128,
+        "cpu_pct": 90.93485151575172,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_run": {
+        "wall": 0.008589518000007956,
+        "cpu": 0.008487,
+        "rss_kb": 16000,
+        "cpu_pct": 98.8064755204208,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "interp_run": {
+        "wall": 1.6450325149999117,
+        "cpu": 1.644583,
+        "rss_kb": 16128,
+        "cpu_pct": 99.97267440030437,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "slowdown": 191.51627774671266,
+      "code_match": true
+    },
+    {
+      "name": "sieve",
+      "description": "prime sieve up to 1,000,000",
+      "source_bytes": 562,
+      "native_compile": {
+        "wall": 0.09543947199927061,
+        "cpu": 0.11029,
+        "rss_kb": 109440,
+        "cpu_pct": 115.56015314171361,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_size_bytes": 4493544,
+      "front_end": {
+        "wall": 0.0010632200010149973,
+        "cpu": 0.000991,
+        "rss_kb": 16128,
+        "cpu_pct": 93.20742640788804,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_run": {
+        "wall": 0.002320610001333989,
+        "cpu": 0.00224,
+        "rss_kb": 16128,
+        "cpu_pct": 96.52634431086433,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "interp_run": {
+        "wall": 0.38051692099907086,
+        "cpu": 0.380277,
+        "rss_kb": 18432,
+        "cpu_pct": 99.93694866487382,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "slowdown": 163.97280059136733,
+      "code_match": true
+    },
+    {
+      "name": "matmul",
+      "description": "100x100 i64 matrix multiply (1M mul-adds)",
+      "source_bytes": 718,
+      "native_compile": {
+        "wall": 0.12453427400032524,
+        "cpu": 0.14029399999999997,
+        "rss_kb": 109952,
+        "cpu_pct": 112.65493064153051,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_size_bytes": 4496904,
+      "front_end": {
+        "wall": 0.0011037099993700394,
+        "cpu": 0.001032,
+        "rss_kb": 16128,
+        "cpu_pct": 93.50282235270413,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_run": {
+        "wall": 0.0021992899983160896,
+        "cpu": 0.002108,
+        "rss_kb": 16128,
+        "cpu_pct": 95.84911501502819,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "interp_run": {
+        "wall": 0.2543854169998667,
+        "cpu": 0.253983,
+        "rss_kb": 16128,
+        "cpu_pct": 99.84180814898407,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "slowdown": 115.66706400458315,
+      "code_match": true
+    },
+    {
+      "name": "quicksort",
+      "description": "quicksort of 50,000 i64 values",
+      "source_bytes": 948,
+      "native_compile": {
+        "wall": 0.10260617099993397,
+        "cpu": 0.1186,
+        "rss_kb": 109900,
+        "cpu_pct": 115.58758975624997,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_size_bytes": 4494600,
+      "front_end": {
+        "wall": 0.001120180000725668,
+        "cpu": 0.001039,
+        "rss_kb": 16128,
+        "cpu_pct": 92.75295035859608,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_run": {
+        "wall": 0.003991858000517823,
+        "cpu": 0.0039049999999999996,
+        "rss_kb": 16128,
+        "cpu_pct": 97.82412098560229,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "interp_run": {
+        "wall": 0.25809385499997006,
+        "cpu": 0.25788999999999995,
+        "rss_kb": 16128,
+        "cpu_pct": 99.92101516714912,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "slowdown": 64.65506913484653,
+      "code_match": true
+    },
+    {
+      "name": "strings",
+      "description": "100k push_str/push on a String",
+      "source_bytes": 349,
+      "native_compile": {
+        "wall": 0.11845311599972774,
+        "cpu": 0.133992,
+        "rss_kb": 113996,
+        "cpu_pct": 113.1181724255426,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_size_bytes": 4496672,
+      "front_end": {
+        "wall": 0.0010515699996176409,
+        "cpu": 0.0009739999999999999,
+        "rss_kb": 16256,
+        "cpu_pct": 92.62341074337932,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "native_run": {
+        "wall": 0.001184290000310284,
+        "cpu": 0.001108,
+        "rss_kb": 16128,
+        "cpu_pct": 93.55816562748178,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "interp_run": {
+        "wall": 0.018669113998839748,
+        "cpu": 0.018487,
+        "rss_kb": 16256,
+        "cpu_pct": 99.02451718463412,
+        "runs": 5,
+        "codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "slowdown": 15.763971657236352,
+      "code_match": true
+    }
+  ]
+}
