@@ -312,11 +312,11 @@ def main():
         shutil.copy2(os.path.join(ROOT, "bench", "bench.py"), script)
         results_json = os.path.join(bench_dir, "results.json")
         results_md = os.path.join(bench_dir, "results.md")
-        sentinel_json = '{"programs": ["sentinel-json"]}\n'
-        sentinel_md = "# sentinel-md\n"
-        with open(results_json, "w") as f:
+        sentinel_json = b'{"programs": ["sentinel-json"]}\n'
+        sentinel_md = b"# sentinel-md\n"
+        with open(results_json, "wb") as f:
             f.write(sentinel_json)
-        with open(results_md, "w") as f:
+        with open(results_md, "wb") as f:
             f.write(sentinel_md)
         env = os.environ.copy()
         env.pop("MINIRUST_NO_JIT", None)
@@ -340,11 +340,11 @@ def main():
         if "no benchmark matched" not in out.stderr:
             print("FAIL unmatched --only did not explain the mismatch")
             failed += 1
-        with open(results_json) as f:
+        with open(results_json, "rb") as f:
             if f.read() != sentinel_json:
                 print("FAIL unmatched --only overwrote results.json")
                 failed += 1
-        with open(results_md) as f:
+        with open(results_md, "rb") as f:
             if f.read() != sentinel_md:
                 print("FAIL unmatched --only overwrote results.md")
                 failed += 1
