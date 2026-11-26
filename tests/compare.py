@@ -19,6 +19,7 @@ def run(cmd):
 def main():
     files = sorted(glob.glob(os.path.join(ROOT, "tests", "programs", "*.rs")))
     failed = 0
+    jit_functions = 0
     for path in files:
         name = os.path.basename(path)
         with tempfile.TemporaryDirectory() as td:
@@ -31,6 +32,10 @@ def main():
             native = run([exe])
             interp = run([MINIRUST, path])
             interp_nojit = run([MINIRUST, "--no-jit", path])
+            stats = run([MINIRUST, "--stats", path])
+        for line in stats.stderr.splitlines():
+            if line.startswith("Ruster jit:") and "function(s)" in line:
+                jit_functions += int(line.split("jit:")[1].split("function")[0].strip())
         if interp.stdout != interp_nojit.stdout or interp.returncode != interp_nojit.returncode:
             print(f"JIT-DIFF {name}")
             print("--- jit ---")
@@ -55,6 +60,10 @@ def main():
             failed += 1
         else:
             print(f"ok   {name}")
+    if jit_functions == 0:
+        print("JIT-NOT-EXERCISED: no test program executed JIT-compiled code")
+        failed += 1
+
     total = len(files)
     print(f"\n{total - failed}/{total} programs match")
     return 1 if failed else 0

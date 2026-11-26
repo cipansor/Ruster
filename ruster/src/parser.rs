@@ -806,7 +806,8 @@ impl Parser {
                     }
                     "break" => {
                         if matches!(self.tok(), Tok::Lifetime) {
-                            self.bump();
+                            return Err(self
+                                .err("labelled `break` is outside the mini-rust subset"));
                         }
                         let value = if self.can_start_expr() {
                             Some(Box::new(self.expr()?))
@@ -817,7 +818,8 @@ impl Parser {
                     }
                     "continue" => {
                         if matches!(self.tok(), Tok::Lifetime) {
-                            self.bump();
+                            return Err(self
+                                .err("labelled `continue` is outside the mini-rust subset"));
                         }
                         return Ok(Expr::Continue);
                     }

@@ -17,6 +17,7 @@ pub enum Value {
 
 /// Backing store for `Vec`: either generic `Value`s or a packed scalar buffer.
 /// Packed buffers keep `Vec<i64>`/`Vec<bool>` loops free of 16-byte `Value`s.
+#[derive(Clone)]
 pub struct VecData {
     values: Vec<Value>,
     ints: Option<Vec<i64>>,

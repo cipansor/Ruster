@@ -17,6 +17,9 @@ struct Frame {
     func: Rc<Func>,
     pc: usize,
     base: usize,
+    /// Operand-stack height when this frame was entered; a `return` drops
+    /// temporaries left by partially evaluated expressions.
+    obase: usize,
 }
 
 #[inline(always)]
@@ -127,7 +130,7 @@ impl Vm {
     fn call(&mut self, fidx: u32, args: Vec<Value>) -> Result<Value, Trap> {
         let prog = &self.prog;
         let main_func = prog.funcs[fidx as usize].clone();
-        let mut frames: Vec<Frame> = vec![Frame { func: main_func.clone(), pc: 0, base: 0 }];
+        let mut frames: Vec<Frame> = vec![Frame { func: main_func.clone(), pc: 0, base: 0, obase: 0 }];
         let mut locals: Vec<Value> = vec![Value::Unit; main_func.nlocals as usize];
         for (i, a) in args.into_iter().enumerate() {
             if i < locals.len() {
@@ -154,7 +157,7 @@ impl Vm {
             pc += 1;
 
             match op {
-                Op::Const(i) => stack.push(prog.consts[*i as usize].clone()),
+                Op::Const(i) => stack.push(prog.consts[*i as usize].deep_clone()),
                 Op::Imm(v) => stack.push(Value::Int(*v)),
                 Op::Unit => stack.push(Value::Unit),
                 Op::Load(s) => stack.push(locals[base + *s as usize].clone()),
@@ -229,7 +232,7 @@ impl Vm {
                     code = unsafe { &(*Rc::as_ptr(&f)).code };
                     base = new_base;
                     pc = 0;
-                    frames.push(Frame { func: f, pc: 0, base: new_base });
+                    frames.push(Frame { func: f, pc: 0, base: new_base, obase: at });
                 }
                 Op::BinLocals { dst, a, b, op } => {
                     let x = locals[base + *a as usize].clone();
@@ -317,6 +320,7 @@ impl Vm {
                 Op::Return => {
                     let v = stack.pop().unwrap_or(Value::Unit);
                     let fr = frames.pop().unwrap();
+                    stack.truncate(fr.obase);
                     locals.truncate(fr.base);
                     if frames.is_empty() {
                         return Ok(v);
@@ -383,7 +387,7 @@ impl Vm {
                 }
                 Op::IndexSetLC { v, i, k, cast } => {
                     let idx = index_of(&locals[base + *i as usize], *cast).map_err(Trap::Panic)?;
-                    let value = prog.consts[*k as usize].clone();
+                    let value = prog.consts[*k as usize].deep_clone();
                     store_index(&locals[base + *v as usize], idx, value)?;
                 }
                 Op::IndexJumpL {

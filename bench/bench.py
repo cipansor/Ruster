@@ -39,6 +39,17 @@ CASES = [
 ]
 
 
+def check_environment():
+    if "MINIRUST_NO_JIT" in os.environ:
+        raise SystemExit(
+            "MINIRUST_NO_JIT is set: the JIT column would silently measure the "
+            "interpreter. Unset it and re-run."
+        )
+
+
+check_environment()
+
+
 def rss_mb(kb):
     return kb / 1024.0
 
@@ -320,7 +331,8 @@ def render_markdown(res):
         f"**{geo:.1f}x** with the JIT, **{interp_geo:.1f}x** interpreter-only.\n"
     )
     lines.append(
-        "All programs produced identical output and exit code under both engines "
+        "All programs produced identical exit codes under both engines; stdout "
+        "parity (native vs Ruster) is enforced by `tests/compare.py`. "
         f"({all(p['code_match'] for p in res['programs'])}).\n"
     )
 

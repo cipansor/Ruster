@@ -112,11 +112,21 @@ pub unsafe fn call(ptr: *const u8, args: &[i64]) -> i64 {
 }
 
 pub fn compile(prog: &Bytecode) -> Jit {
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = prog;
+        return Jit::empty();
+    }
+    #[cfg(target_arch = "x86_64")]
     let funcs = &prog.funcs;
     let n = funcs.len();
     let mut ok = vec![false; n];
     for (i, f) in funcs.iter().enumerate() {
-        ok[i] = eligible_preconditions(f) && analyse(funcs, i).is_some();
+        ok[i] = eligible_preconditions(f)
+            && !f.code
+                .iter()
+                .any(|op| matches!(op, Op::Call(c) if *c as usize == i))
+            && analyse(funcs, i).is_some();
     }
     // A function is only eligible if every callee is eligible.
     loop {

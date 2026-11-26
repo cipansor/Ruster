@@ -1072,8 +1072,12 @@ impl<'a> FnCompiler<'a> {
                     }
                 }
             }
-            Expr::Unary(UnOp::Deref, inner) => {
-                return self.compile_assign(op, inner, rhs);
+            Expr::Unary(UnOp::Deref, _) => {
+                return Err(
+                    "assignment through a reference (`*x = ...`) is outside the mini-rust subset: \
+                     references to scalars are passed by value, so the write would not reach the caller"
+                        .into(),
+                );
             }
             Expr::Field(_, name) => {
                 return Err(format!(
@@ -1097,8 +1101,21 @@ impl<'a> FnCompiler<'a> {
                     .get(name)
                     .ok_or_else(|| format!("cannot find function `{name}`"))?;
                 self.check_arity(name, idx, args.len())?;
+                let arg_start = self.code.len();
                 for a in args {
                     self.compile_expr(a)?;
+                }
+                let arg_end = self.code.len();
+                // A `break`/`continue` inside an argument jumps out of the argument
+                // range, abandoning the arguments already pushed for this call.
+                if self.code[arg_start..arg_end]
+                    .iter()
+                    .any(|op| matches!(op, Op::Jump(t) if (*t as usize) < arg_start || (*t as usize) > arg_end))
+                {
+                    return Err(
+                        "`break`/`continue` inside call arguments is outside the mini-rust subset"
+                            .into(),
+                    );
                 }
                 self.emit(Op::Call(idx));
             }
@@ -1477,35 +1494,6 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
                     i += 6;
                     continue;
                 }
-            }
-        }
-        if i + 4 < code.len()
-            && !targets[i + 1]
-            && !targets[i + 2]
-            && !targets[i + 3]
-            && !targets[i + 4]
-            && int_cast_kind(&code[i + 2]).is_none()
-        {
-            if let (
-                Op::Load(v),
-                Op::Load(idx),
-                Op::Load(j),
-                Op::Index,
-                Op::IndexSet,
-            ) = (&code[i], &code[i + 1], &code[i + 2], &code[i + 3], &code[i + 4])
-            {
-                let at = out.len();
-                out.push(Op::IndexSetFromIndex {
-                    v: *v,
-                    i: *idx,
-                    j: *j,
-                    cast: None,
-                });
-                for off in 1..5 {
-                    map[i + off] = at;
-                }
-                i += 5;
-                continue;
             }
         }
         if i + 4 < code.len()
