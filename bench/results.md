@@ -1,4 +1,4 @@
-# minirust benchmark results
+# Ruster benchmark results
 
 - Date: 2026-11-26T14:36:18
 - Host: Linux-6.8.0-1055-gke-x86_64-with-glibc2.41 (4 CPUs)
@@ -9,7 +9,7 @@
 
 ## Compile phase (per program)
 
-| program | rustc -O wall | rustc CPU | rustc RSS | native binary | minirust front-end wall | front-end CPU | front-end RSS |
+| program | rustc -O wall | rustc CPU | rustc RSS | native binary | Ruster front-end wall | front-end CPU | front-end RSS |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | hello | 71.9 ms | 87.0 ms | 89.5 MB | 4.3 MB | 1.0 ms | 0.9 ms | 15.6 MB |
 | fib | 75.1 ms | 89.5 ms | 90.6 MB | 4.3 MB | 1.0 ms | 1.0 ms | 15.8 MB |
@@ -20,11 +20,11 @@
 | quicksort | 101.9 ms | 117.0 ms | 107.8 MB | 4.3 MB | 1.1 ms | 1.1 ms | 15.8 MB |
 | strings | 115.9 ms | 131.4 ms | 111.2 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.8 MB |
 
-`minirust front-end` is lexing + parsing + bytecode generation, measured through `rust --compile-only`.
+`Ruster front-end` is lexing + parsing + bytecode generation, measured through `rust --compile-only`.
 
 ## Runtime phase (per program)
 
-| program | native wall | native CPU | native CPU% | native RSS | minirust (JIT) wall | CPU | CPU% | RSS | slowdown |
+| program | native wall | native CPU | native CPU% | native RSS | Ruster (JIT) wall | CPU | CPU% | RSS | slowdown |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | hello | 0.8 ms | 0.8 ms | 92% | 15.6 MB | 1.0 ms | 0.9 ms | 92% | 15.6 MB | 1.2x |
 | fib | 3.0 ms | 2.9 ms | 97% | 15.6 MB | 9.4 ms | 9.3 ms | 99% | 15.6 MB | 3.2x |
@@ -53,7 +53,7 @@ The JIT only covers functions whose parameters, locals, calls and return value a
 
 ## End-to-end (source -> output)
 
-| program | rustc compile + run | minirust front-end + run | ratio |
+| program | rustc compile + run | Ruster front-end + run | ratio |
 |---|---:|---:|---:|
 | hello | 72.7 ms | 2.0 ms | 1/36.8 faster |
 | fib | 78.0 ms | 10.5 ms | 1/7.4 faster |

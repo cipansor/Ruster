@@ -1,4 +1,7 @@
-# minirust — interpreter Rust + JIT x86-64 dalam satu binary, tanpa cargo
+# Ruster — interpreter Rust + JIT x86-64 dalam satu binary, tanpa cargo
+
+> **Ruster** adalah singkatan dari **Rust Interpreter** — nama proyeknya, bukan
+> nama bahasa yang diinterpretasi.
 
 Eksperimen: seberapa jauh implementasi Rust dari nol (tanpa LLVM, tanpa crate
 eksternal, tanpa cargo) bisa mendekati kecepatan Rust native — dan apa yang
@@ -33,7 +36,7 @@ yang mengindeks `Vec`/`String`, yang belum dicakup JIT.
 Tidak perlu cargo. Cukup `rustc`:
 
 ```bash
-rustc --edition 2021 -O minirust/src/main.rs -o bin/rust
+rustc --edition 2021 -O ruster/src/main.rs -o bin/rust
 ```
 
 Lalu:
@@ -47,16 +50,16 @@ Halo, dunia! 1 + 1 = 2
 
 $ bin/rust --stats hello.rs
 Halo, dunia! 1 + 1 = 2
-minirust stats: front-end 0.019 ms, run 0.017 ms
-minirust jit: no functions were eligible
+Ruster stats: front-end 0.019 ms, run 0.017 ms
+Ruster jit: no functions were eligible
 
 $ bin/rust --stats bench/programs/fib.rs
 fib(30) = 832040
-minirust stats: front-end 0.037 ms, run 8.310 ms
-minirust jit: 1 function(s): fib
+Ruster stats: front-end 0.037 ms, run 8.310 ms
+Ruster jit: 1 function(s): fib
 
 $ bin/rust --compile-only hello.rs
-minirust front-end: 0.019 ms | 1 function(s), 7 instruction(s), 2 constant(s), 1 template(s), 0 global(s)
+Ruster front-end: 0.019 ms | 1 function(s), 7 instruction(s), 2 constant(s), 1 template(s), 0 global(s)
 
 $ bin/rust --dump bench/programs/fib.rs
 fn fib [0] params=1 locals=1
@@ -78,7 +81,7 @@ Tidak ada dependency runtime dan tidak ada file pendamping.
 ### Menjalankan test
 
 ```bash
-# 12 program fitur: rustc vs minirust (JIT) vs minirust --no-jit
+# 12 program fitur: rustc vs Ruster (JIT) vs Ruster --no-jit
 python3 tests/compare.py
 
 # 4 kasus error: exit code 101 (panic) / 3 (process::exit)
@@ -97,8 +100,8 @@ python3 bench/bench.py --runs 5 --compile-runs 5
 ```
 
 Harness memakai Python hanya untuk mengukur (`fork/exec` + `os.wait4`), bukan
-bagian dari runtime. Setiap program diukur tiga kali: native, minirust (JIT),
-dan minirust `--no-jit`.
+bagian dari runtime. Setiap program diukur tiga kali: native, Ruster (JIT),
+dan Ruster `--no-jit`.
 
 ---
 
@@ -223,7 +226,7 @@ program: 5 kompilasi, 5 eksekusi; median wall/CPU, peak RSS maksimum.
 
 ### 4.1 Fase kompilasi (per program)
 
-| program | rustc -O wall | rustc CPU | rustc RSS | native binary | minirust front-end wall | front-end CPU | front-end RSS |
+| program | rustc -O wall | rustc CPU | rustc RSS | native binary | Ruster front-end wall | front-end CPU | front-end RSS |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | hello | 71.9 ms | 87.0 ms | 89.5 MB | 4.3 MB | 1.0 ms | 0.9 ms | 15.6 MB |
 | fib | 75.1 ms | 89.5 ms | 90.6 MB | 4.3 MB | 1.0 ms | 1.0 ms | 15.8 MB |
@@ -242,7 +245,7 @@ Build interpreter sekali saja: `rustc -O` = **2.4 s wall, 6.8 s CPU (paralel),
 
 ### 4.2 Fase runtime (dengan JIT)
 
-| program | native wall | native CPU | native CPU% | native RSS | minirust (JIT) wall | CPU | CPU% | RSS | slowdown |
+| program | native wall | native CPU | native CPU% | native RSS | Ruster (JIT) wall | CPU | CPU% | RSS | slowdown |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | hello | 0.8 ms | 0.8 ms | 92% | 15.6 MB | 1.0 ms | 0.9 ms | 92% | 15.6 MB | 1.2x |
 | fib | 3.0 ms | 2.9 ms | 97% | 15.6 MB | 9.4 ms | 9.3 ms | 99% | 15.6 MB | 3.2x |
@@ -271,7 +274,7 @@ kompilasi paralel.
 
 ### 4.4 End-to-end (sumber -> output)
 
-| program | rustc compile + run | minirust front-end + run | ratio |
+| program | rustc compile + run | Ruster front-end + run | ratio |
 |---|---:|---:|---:|
 | hello | 72.7 ms | 2.0 ms | 1/36.8 faster |
 | fib | 78.0 ms | 10.5 ms | 1/7.4 faster |
@@ -284,12 +287,12 @@ kompilasi paralel.
 
 **Geometric-mean slowdown runtime: 10.8x dengan JIT, 40.0x tanpa JIT.**
 
-Karena `rustc -O` makan 73–125 ms per program, minirust menang end-to-end untuk
+Karena `rustc -O` makan 73–125 ms per program, Ruster menang end-to-end untuk
 program yang berjalan singkat — sekarang termasuk fib dan loop 10 juta iterasi.
 
 ### 4.5 Ukuran & memori
 
-| hal | native | minirust |
+| hal | native | Ruster |
 |---|---:|---:|
 | binary hello | 4.3 MB | 4.9 MB (satu binary untuk semua) |
 | binary quicksort | 4.3 MB | 4.9 MB |
@@ -297,9 +300,9 @@ program yang berjalan singkat — sekarang termasuk fib dan loop 10 juta iterasi
 | RSS runtime (hello) | 15.6 MB | 15.6 MB |
 | RSS runtime (sieve 1M bool) | 15.6 MB | 15.6 MB |
 
-Catatan: `Vec<bool>` di minirust menyimpan satu `Value` 16 byte per elemen,
+Catatan: `Vec<bool>` di Ruster menyimpan satu `Value` 16 byte per elemen,
 bukan 1 bit/byte seperti Rust. Native 4.3 MB sebagian besar adalah Rust std
-yang di-link statis; minirust 4.9 MB juga sebagian besar std, tetapi satu
+yang di-link statis; Ruster 4.9 MB juga sebagian besar std, tetapi satu
 binary menjalankan semua program tanpa kompilasi per program.
 
 ---
@@ -360,7 +363,7 @@ menurunkan geometric mean ke kisaran 2–4x native.
 ### 5.4 Kenapa bukan compile-to-native?
 
 Karena `rustc -O` sudah menjadi kompilasi native terbaik: 73–125 ms per
-program, lalu kecepatan penuh. minirust menang hanya ketika biaya kompilasi
+program, lalu kecepatan penuh. Ruster menang hanya ketika biaya kompilasi
 itu lebih besar daripada penghematan runtime — yaitu untuk program yang
 selesai dalam beberapa milidetik. JIT adalah cara mendapatkan sebagian
 kecepatan native tanpa membayar kompilasi di depan; AOT (menghasilkan kode
@@ -403,7 +406,7 @@ struktur data, bukan bug implementasi).
 
 ## 6. Deviasi semantik (penting)
 
-| Hal | Rust | minirust |
+| Hal | Rust | Ruster |
 |---|---|---|
 | Lebar integer | `i8`/`u8`/... berbeda | semua disimpan `i64`; overflow membungkus |
 | `u64` > `i64::MAX` | nilai besar | bit pattern negatif; perbandingan bisa salah |
@@ -447,7 +450,7 @@ instruksi. `CmpImmJump` adalah `Load; Imm; Bin(Lt); JumpF` yang digabung;
 ## 8. Struktur repo
 
 ```
-minirust/src/
+ruster/src/
   lexer.rs      tokenizer
   ast.rs        AST + tipe
   parser.rs     recursive descent

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check exit codes and error behaviour of minirust itself."""
+"""Check exit codes and error behaviour of Ruster itself."""
 import os
 import subprocess
 import sys

@@ -46,7 +46,7 @@ fn real_main() -> i32 {
                 return 0;
             }
             "-V" | "--version" => {
-                println!("minirust {VERSION} (single-binary Rust interpreter, no cargo)");
+                println!("Ruster {VERSION} (single-binary Rust interpreter, no cargo)");
                 return 0;
             }
             "-c" | "--compile-only" => compile_only = true,
@@ -123,7 +123,7 @@ fn real_main() -> i32 {
     if compile_only {
         let instrs: usize = bc.funcs.iter().map(|f| f.code.len()).sum();
         eprintln!(
-            "minirust front-end: {:.3} ms | {} function(s), {} instruction(s), {} constant(s), {} template(s), {} global(s)",
+            "Ruster front-end: {:.3} ms | {} function(s), {} instruction(s), {} constant(s), {} template(s), {} global(s)",
             front_end.as_secs_f64() * 1000.0,
             bc.funcs.len(),
             instrs,
@@ -141,19 +141,19 @@ fn real_main() -> i32 {
     let run_time = run_start.elapsed();
     if stats {
         eprintln!(
-            "minirust stats: front-end {:.3} ms, run {:.3} ms",
+            "Ruster stats: front-end {:.3} ms, run {:.3} ms",
             front_end.as_secs_f64() * 1000.0,
             run_time.as_secs_f64() * 1000.0
         );
         if use_jit {
             let names = machine.jit_names();
             if names.is_empty() {
-                eprintln!("minirust jit: no functions were eligible");
+                eprintln!("Ruster jit: no functions were eligible");
             } else {
-                eprintln!("minirust jit: {} function(s): {}", names.len(), names.join(", "));
+                eprintln!("Ruster jit: {} function(s): {}", names.len(), names.join(", "));
             }
         } else {
-            eprintln!("minirust jit: disabled");
+            eprintln!("Ruster jit: disabled");
         }
     }
     match outcome {
@@ -183,7 +183,7 @@ fn resolve_path(path: &str) -> String {
 
 fn usage() {
     eprintln!(
-        "minirust {VERSION} — a fast, dependency-free interpreter for a subset of Rust
+        "Ruster {VERSION} — a fast, dependency-free interpreter for a subset of Rust
 
 USAGE:
     rust <file.rs> [--stats]     run a program

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark minirust against rustc/native code.
+"""Benchmark Ruster against rustc/native code.
 
 Measures, per program:
   compile phase: wall time, CPU time, peak RSS, output size
@@ -21,7 +21,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROGRAMS = os.path.join(ROOT, "bench", "programs")
-SRC = os.path.join(ROOT, "minirust", "src", "main.rs")
+SRC = os.path.join(ROOT, "Ruster", "src", "main.rs")
 BIN = os.path.join(ROOT, "bin", "rust")
 RESULTS_JSON = os.path.join(ROOT, "bench", "results.json")
 RESULTS_MD = os.path.join(ROOT, "bench", "results.md")
@@ -224,7 +224,7 @@ def fmt_bytes(n):
 def render_markdown(res):
     meta = res["meta"]
     lines = []
-    lines.append("# minirust benchmark results\n")
+    lines.append("# Ruster benchmark results\n")
     lines.append(f"- Date: {meta['date']}")
     lines.append(f"- Host: {meta['host']} ({meta['cpu_count']} CPUs)")
     lines.append(f"- rustc: `{meta['rustc']}`")
@@ -244,7 +244,7 @@ def render_markdown(res):
     lines.append("## Compile phase (per program)\n")
     lines.append(
         "| program | rustc -O wall | rustc CPU | rustc RSS | native binary | "
-        "minirust front-end wall | front-end CPU | front-end RSS |"
+        "Ruster front-end wall | front-end CPU | front-end RSS |"
     )
     lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
     for p in res["programs"]:
@@ -256,12 +256,12 @@ def render_markdown(res):
             f"{fmt_ms(fe['wall'])} ms | {fmt_ms(fe['cpu'])} ms | "
             f"{rss_mb(fe['rss_kb']):.1f} MB |"
         )
-    lines.append("\n`minirust front-end` is lexing + parsing + bytecode generation, " f"measured through `rust --compile-only`.\n")
+    lines.append("\n`Ruster front-end` is lexing + parsing + bytecode generation, " f"measured through `rust --compile-only`.\n")
 
     lines.append("## Runtime phase (per program)\n")
     lines.append(
         "| program | native wall | native CPU | native CPU% | native RSS | "
-        "minirust (JIT) wall | CPU | CPU% | RSS | slowdown |"
+        "Ruster (JIT) wall | CPU | CPU% | RSS | slowdown |"
     )
     lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for p in res["programs"]:
@@ -295,7 +295,7 @@ def render_markdown(res):
     )
 
     lines.append("\n## End-to-end (source -> output)\n")
-    lines.append("| program | rustc compile + run | minirust front-end + run | ratio |")
+    lines.append("| program | rustc compile + run | Ruster front-end + run | ratio |")
     lines.append("|---|---:|---:|---:|")
     for p in res["programs"]:
         native_total = p["native_compile"]["wall"] + p["native_run"]["wall"]

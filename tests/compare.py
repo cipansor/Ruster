@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Run every tests/programs/*.rs with rustc, minirust (JIT on) and
-minirust --no-jit, and require all three to agree on stdout and exit code."""
+"""Run every tests/programs/*.rs with rustc, Ruster (JIT on) and
+Ruster --no-jit, and require all three to agree on stdout and exit code."""
 import glob
 import os
 import subprocess
@@ -42,14 +42,14 @@ def main():
             print(f"DIFF {name}")
             print("--- native ---")
             print(native.stdout)
-            print("--- minirust ---")
+            print("--- Ruster ---")
             print(interp.stdout)
             if interp.stderr:
-                print("--- minirust stderr ---")
+                print("--- Ruster stderr ---")
                 print(interp.stderr)
             failed += 1
         elif native.returncode != interp.returncode:
-            print(f"EXIT {name}: native={native.returncode} minirust={interp.returncode}")
+            print(f"EXIT {name}: native={native.returncode} Ruster={interp.returncode}")
             if interp.stderr:
                 print(interp.stderr)
             failed += 1
