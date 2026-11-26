@@ -171,6 +171,16 @@ pub enum Op {
     CmpImmJump { a: u16, imm: i64, op: BinOp, target: u32, jump_if: bool },
     /// Fused `load slot; jumpF/jumpT target`.
     JumpLocal { slot: u16, target: u32, jump_if: bool },
+    /// Fused `load a; load b; bin op` (result pushed).
+    PushBinLocals { a: u16, b: u16, op: BinOp },
+    /// Fused `load a; imm k; bin op` (result pushed).
+    PushBinLocalImm { a: u16, imm: i64, op: BinOp },
+    /// Fused `imm k; bin op` (result pushed).
+    TopBinImm { imm: i64, op: BinOp },
+    /// Fused `bin op; store dst`.
+    BinStore { op: BinOp, dst: u16 },
+    /// Constant-folded integer expression.
+    FoldImm(i64),
     Return,
 }
 
@@ -178,6 +188,10 @@ pub struct Func {
     pub name: String,
     pub nparams: u16,
     pub nlocals: u16,
+    /// Every parameter is declared as an integer type (JIT precondition).
+    pub params_int: bool,
+    /// The return type is an integer type (JIT precondition).
+    pub ret_int: bool,
     pub code: Vec<Op>,
 }
 
@@ -231,6 +245,8 @@ pub fn compile(ast: ProgramAst) -> Result<Bytecode, String> {
             name: f.name.clone(),
             nparams: f.params.len() as u16,
             nlocals: f.params.len() as u16,
+            params_int: f.params.iter().all(|(_, t)| matches!(t, Some(Type::Int(_)))),
+            ret_int: matches!(f.ret, Some(Type::Int(_))),
             code: Vec::new(),
         }));
     }
@@ -491,6 +507,8 @@ impl<'a> FnCompiler<'a> {
             name: f.name.clone(),
             nparams: f.params.len() as u16,
             nlocals: fc.max_locals,
+            params_int: f.params.iter().all(|(_, t)| matches!(t, Some(Type::Int(_)))),
+            ret_int: matches!(f.ret, Some(Type::Int(_))),
             code: peephole(fc.code),
         })
     }
@@ -613,20 +631,72 @@ impl<'a> FnCompiler<'a> {
                 }
                 Stmt::Expr { expr, semi } => {
                     let is_last = i + 1 == n;
-                    self.compile_expr(expr)?;
-                    let diverges = diverges(expr);
                     if *semi || !is_last {
-                        if !diverges {
-                            self.emit(Op::Pop);
-                        }
+                        self.compile_expr_discard(expr)?;
                     } else {
-                        last_is_value = !diverges;
+                        self.compile_expr(expr)?;
+                        last_is_value = !diverges(expr);
                     }
                 }
             }
         }
         if !last_is_value {
             self.emit(Op::Unit);
+        }
+        self.scope_exit();
+        Ok(())
+    }
+
+    /// Compile an expression whose value is discarded. `if`/blocks avoid
+    /// materialising a value, which keeps branches (and therefore loops) free
+    /// of `Unit` pushes and makes them JIT-eligible.
+    fn compile_expr_discard(&mut self, e: &Expr) -> Result<(), String> {
+        match e {
+            Expr::If { cond, then_b, else_b } => {
+                self.compile_expr(cond)?;
+                let jf = self.emit_jump(Op::JumpF(0));
+                self.compile_block_discard(then_b)?;
+                let jend = self.emit_jump(Op::Jump(0));
+                let else_start = self.here();
+                self.patch(jf, else_start);
+                if let Some(els) = else_b {
+                    self.compile_expr_discard(els)?;
+                }
+                let end = self.here();
+                self.patch(jend, end);
+                Ok(())
+            }
+            Expr::Block(b) => self.compile_block_discard(b),
+            _ => {
+                self.compile_expr(e)?;
+                if !diverges(e) {
+                    self.emit(Op::Pop);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn compile_block_discard(&mut self, b: &Block) -> Result<(), String> {
+        self.scope_enter();
+        let n = b.stmts.len();
+        for (i, s) in b.stmts.iter().enumerate() {
+            match s {
+                Stmt::Let { pat, ty, init, .. } => {
+                    self.compile_let(pat, ty.as_ref(), init.as_ref())?;
+                }
+                Stmt::Expr { expr, semi } => {
+                    let is_last = i + 1 == n;
+                    if *semi || !is_last {
+                        self.compile_expr_discard(expr)?;
+                    } else {
+                        self.compile_expr(expr)?;
+                        if !diverges(expr) {
+                            self.emit(Op::Pop);
+                        }
+                    }
+                }
+            }
         }
         self.scope_exit();
         Ok(())
@@ -1304,10 +1374,26 @@ impl<'a> FnCompiler<'a> {
 fn peephole(code: Vec<Op>) -> Vec<Op> {
     let mut out: Vec<Op> = Vec::with_capacity(code.len());
     let mut map = vec![0usize; code.len() + 1];
+    let mut targets: Vec<bool> = vec![false; code.len() + 1];
+    for op in &code {
+        match op {
+            Op::Jump(t) | Op::JumpF(t) | Op::JumpT(t) | Op::IterGet(t) => {
+                targets[*t as usize] = true
+            }
+            Op::CmpJump { target, .. }
+            | Op::CmpImmJump { target, .. }
+            | Op::JumpLocal { target, .. } => targets[*target as usize] = true,
+            _ => {}
+        }
+    }
     let mut i = 0;
     while i < code.len() {
         map[i] = out.len();
-        if i + 3 < code.len() {
+        if i + 3 < code.len()
+            && !targets[i + 1]
+            && !targets[i + 2]
+            && !targets[i + 3]
+        {
             let fused = match (&code[i], &code[i + 1], &code[i + 2], &code[i + 3]) {
                 (Op::Load(a), Op::Load(b), Op::Bin(op), Op::Store(c)) => Some(Op::BinLocals {
                     dst: *c,
@@ -1369,8 +1455,48 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
                 continue;
             }
         }
+        if i + 2 < code.len() && !targets[i + 1] && !targets[i + 2] {
+            let folded = match (&code[i], &code[i + 1], &code[i + 2]) {
+                (Op::Load(a), Op::Load(b), Op::Bin(op)) => Some(Op::PushBinLocals {
+                    a: *a,
+                    b: *b,
+                    op: *op,
+                }),
+                (Op::Load(a), Op::Imm(k), Op::Bin(op)) => Some(Op::PushBinLocalImm {
+                    a: *a,
+                    imm: *k,
+                    op: *op,
+                }),
+                (Op::Imm(x), Op::Imm(y), Op::Bin(op)) => fold_imm(*op, *x, *y).map(Op::FoldImm),
+                _ => None,
+            };
+            if let Some(op) = folded {
+                let at = out.len();
+                out.push(op);
+                map[i + 1] = at;
+                map[i + 2] = at;
+                i += 3;
+                continue;
+            }
+        }
         if i + 1 < code.len() {
-            let fused = match (&code[i], &code[i + 1]) {
+            // `unit; pop` has no observable effect; dropping it also makes
+            // loop-heavy functions eligible for the JIT (which has no Unit).
+            if let (Op::Unit, Op::Pop) = (&code[i], &code[i + 1]) {
+                // If the Pop is a merge point (the shared discard after
+                // `if/else`), removing it would unbalance the other arm.
+                if !targets[i + 1] {
+                    let at = out.len();
+                    map[i] = at;
+                    map[i + 1] = at;
+                    i += 2;
+                    continue;
+                }
+            }
+            let fused = if targets[i + 1] {
+                None
+            } else {
+                match (&code[i], &code[i + 1]) {
                 (Op::Load(a), Op::JumpF(t)) => Some(Op::JumpLocal {
                     slot: *a,
                     target: *t,
@@ -1381,7 +1507,16 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
                     target: *t,
                     jump_if: true,
                 }),
+                (Op::Bin(op), Op::Store(d)) => Some(Op::BinStore {
+                    op: *op,
+                    dst: *d,
+                }),
+                (Op::Imm(k), Op::Bin(op)) => Some(Op::TopBinImm {
+                    imm: *k,
+                    op: *op,
+                }),
                 _ => None,
+                }
             };
             if let Some(op) = fused {
                 let at = out.len();
@@ -1407,6 +1542,23 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
         }
     }
     out
+}
+
+/// Integer constant folding with the same wrapping semantics as the VM.
+/// Comparisons are excluded because their result is a bool, and Div/Rem are
+/// excluded because a zero divisor must panic at runtime.
+fn fold_imm(op: BinOp, a: i64, b: i64) -> Option<i64> {
+    Some(match op {
+        BinOp::Add => a.wrapping_add(b),
+        BinOp::Sub => a.wrapping_sub(b),
+        BinOp::Mul => a.wrapping_mul(b),
+        BinOp::BitAnd => a & b,
+        BinOp::BitOr => a | b,
+        BinOp::BitXor => a ^ b,
+        BinOp::Shl => a.wrapping_shl((b as u64 & 63) as u32),
+        BinOp::Shr => a.wrapping_shr((b as u64 & 63) as u32),
+        _ => return None,
+    })
 }
 
 fn is_compare(op: BinOp) -> bool {

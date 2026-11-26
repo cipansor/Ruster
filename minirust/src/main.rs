@@ -8,6 +8,7 @@
 
 mod ast;
 mod compiler;
+mod jit;
 mod lexer;
 mod ops;
 mod parser;
@@ -34,6 +35,7 @@ fn real_main() -> i32 {
     let mut compile_only = false;
     let mut dump = false;
     let mut stats = false;
+    let mut no_jit = false;
     let mut path: Option<String> = None;
     let mut i = 0;
     while i < argv.len() {
@@ -48,6 +50,7 @@ fn real_main() -> i32 {
                 return 0;
             }
             "-c" | "--compile-only" => compile_only = true,
+            "--no-jit" => no_jit = true,
             "-d" | "--dump" => dump = true,
             "--stats" => stats = true,
             "--" => {
@@ -131,8 +134,9 @@ fn real_main() -> i32 {
         return 0;
     }
 
+    let use_jit = !no_jit && std::env::var_os("MINIRUST_NO_JIT").is_none();
     let run_start = Instant::now();
-    let mut machine = vm::Vm::new(bc);
+    let mut machine = vm::Vm::new(bc, use_jit);
     let outcome = machine.run();
     let run_time = run_start.elapsed();
     if stats {
@@ -141,6 +145,16 @@ fn real_main() -> i32 {
             front_end.as_secs_f64() * 1000.0,
             run_time.as_secs_f64() * 1000.0
         );
+        if use_jit {
+            let names = machine.jit_names();
+            if names.is_empty() {
+                eprintln!("minirust jit: no functions were eligible");
+            } else {
+                eprintln!("minirust jit: {} function(s): {}", names.len(), names.join(", "));
+            }
+        } else {
+            eprintln!("minirust jit: disabled");
+        }
     }
     match outcome {
         Ok(()) => 0,

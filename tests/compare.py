@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Run every tests/programs/*.rs with rustc and with minirust, compare stdout."""
+"""Run every tests/programs/*.rs with rustc, minirust (JIT on) and
+minirust --no-jit, and require all three to agree on stdout and exit code."""
 import glob
 import os
 import subprocess
@@ -29,7 +30,15 @@ def main():
                 continue
             native = run([exe])
             interp = run([MINIRUST, path])
-        if native.stdout != interp.stdout:
+            interp_nojit = run([MINIRUST, "--no-jit", path])
+        if interp.stdout != interp_nojit.stdout or interp.returncode != interp_nojit.returncode:
+            print(f"JIT-DIFF {name}")
+            print("--- jit ---")
+            print(interp.stdout)
+            print("--- no-jit ---")
+            print(interp_nojit.stdout)
+            failed += 1
+        elif native.stdout != interp.stdout:
             print(f"DIFF {name}")
             print("--- native ---")
             print(native.stdout)

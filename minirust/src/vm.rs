@@ -1,6 +1,7 @@
 //! The bytecode interpreter: an explicit-stack VM (no host recursion).
 
 use crate::compiler::{Func, MethodId, Op, TPiece};
+use crate::jit;
 use crate::ops;
 use crate::value::{compare, format_value, parse_spec, Value};
 use std::io::{BufWriter, Stderr, Stdout, Write};
@@ -22,6 +23,7 @@ pub struct Vm {
     globals: Vec<Value>,
     out: BufWriter<Stdout>,
     err: BufWriter<Stderr>,
+    jit: jit::Jit,
 }
 
 fn pop(stack: &mut Vec<Value>) -> Result<Value, Trap> {
@@ -38,14 +40,26 @@ fn take(stack: &mut Vec<Value>, n: usize) -> Result<Vec<Value>, Trap> {
 }
 
 impl Vm {
-    pub fn new(prog: crate::compiler::Bytecode) -> Vm {
+    pub fn new(prog: crate::compiler::Bytecode, use_jit: bool) -> Vm {
+        let jit = if use_jit {
+            jit::compile(&prog)
+        } else {
+            jit::Jit::empty()
+        };
         let globals = prog.globals.clone();
         Vm {
             prog,
             globals,
             out: BufWriter::new(std::io::stdout()),
             err: BufWriter::new(std::io::stderr()),
+            jit,
         }
+    }
+
+    pub fn jit_names(&self) -> Vec<String> {
+        let mut names = self.jit.names().to_vec();
+        names.sort();
+        names
     }
 
     pub fn run(&mut self) -> Result<(), Trap> {
@@ -166,6 +180,21 @@ impl Vm {
                     if stack.len() < n {
                         return Err(Trap::Panic("operand stack underflow in call".into()));
                     }
+                    let at_args = stack.len() - n;
+                    if let Some(ptr) = self.jit.get(*callee) {
+                        if stack[at_args..].iter().all(|v| matches!(v, Value::Int(_))) {
+                            let mut args = [0i64; 6];
+                            for i in 0..n {
+                                if let Value::Int(v) = stack[at_args + i] {
+                                    args[i] = v;
+                                }
+                            }
+                            let result = unsafe { jit::call(ptr, &args[..n]) };
+                            stack.truncate(at_args);
+                            stack.push(Value::Int(result));
+                            continue;
+                        }
+                    }
                     frames.last_mut().unwrap().pc = pc;
                     let at = stack.len() - n;
                     let new_base = locals.len();
@@ -182,6 +211,43 @@ impl Vm {
                 Op::BinLocals { dst, a, b, op } => {
                     let x = locals[base + *a as usize].clone();
                     let y = locals[base + *b as usize].clone();
+                    let v = match ops::binop_fast(*op, &x, &y) {
+                        Some(v) => v,
+                        None => ops::binop(*op, &x, &y).map_err(Trap::Panic)?,
+                    };
+                    locals[base + *dst as usize] = v;
+                }
+                Op::FoldImm(v) => stack.push(Value::Int(*v)),
+                Op::PushBinLocals { a, b, op } => {
+                    let x = locals[base + *a as usize].clone();
+                    let y = locals[base + *b as usize].clone();
+                    let v = match ops::binop_fast(*op, &x, &y) {
+                        Some(v) => v,
+                        None => ops::binop(*op, &x, &y).map_err(Trap::Panic)?,
+                    };
+                    stack.push(v);
+                }
+                Op::PushBinLocalImm { a, imm, op } => {
+                    let x = locals[base + *a as usize].clone();
+                    let y = Value::Int(*imm);
+                    let v = match ops::binop_fast(*op, &x, &y) {
+                        Some(v) => v,
+                        None => ops::binop(*op, &x, &y).map_err(Trap::Panic)?,
+                    };
+                    stack.push(v);
+                }
+                Op::TopBinImm { imm, op } => {
+                    let x = pop(&mut stack)?;
+                    let y = Value::Int(*imm);
+                    let v = match ops::binop_fast(*op, &x, &y) {
+                        Some(v) => v,
+                        None => ops::binop(*op, &x, &y).map_err(Trap::Panic)?,
+                    };
+                    stack.push(v);
+                }
+                Op::BinStore { op, dst } => {
+                    let y = pop(&mut stack)?;
+                    let x = pop(&mut stack)?;
                     let v = match ops::binop_fast(*op, &x, &y) {
                         Some(v) => v,
                         None => ops::binop(*op, &x, &y).map_err(Trap::Panic)?,

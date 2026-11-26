@@ -30,7 +30,8 @@ RESULTS_MD = os.path.join(ROOT, "bench", "results.md")
 CASES = [
     ("hello", "hello world + one format arg"),
     ("fib", "naive recursive fib(30), 1.6M calls"),
-    ("loop_sum", "10M-iteration while loop with mod/mul/add"),
+    ("loop_sum", "10M-iteration integer loop (JIT-eligible helper)"),
+    ("collatz", "200k Collatz sequences (branchy JIT code)"),
     ("sieve", "prime sieve up to 1,000,000"),
     ("matmul", "100x100 i64 matrix multiply (1M mul-adds)"),
     ("quicksort", "quicksort of 50,000 i64 values"),
@@ -156,13 +157,15 @@ def main():
             native_size = os.path.getsize(exe)
 
             native_runs = [run_measured([exe]) for _ in range(args.runs)]
-            interp_runs = [run_measured([BIN, src]) for _ in range(args.runs)]
+            jit_runs = [run_measured([BIN, src]) for _ in range(args.runs)]
+            interp_runs = [run_measured([BIN, "--no-jit", src]) for _ in range(args.runs)]
 
             fe_rows = []
             for _ in range(args.compile_runs):
                 fe_rows.append(run_measured([BIN, "--compile-only", src]))
 
         native_run = summarize(native_runs)
+        jit_run = summarize(jit_runs)
         interp_run = summarize(interp_runs)
         front_end = summarize(fe_rows)
 
@@ -174,17 +177,25 @@ def main():
             "native_size_bytes": native_size,
             "front_end": front_end,
             "native_run": native_run,
+            "jit_run": jit_run,
             "interp_run": interp_run,
-            "slowdown": interp_run["wall"] / native_run["wall"]
+            "slowdown": jit_run["wall"] / native_run["wall"]
             if native_run["wall"] > 0
             else None,
-            "code_match": native_run["codes"] == interp_run["codes"],
+            "interp_slowdown": interp_run["wall"] / native_run["wall"]
+            if native_run["wall"] > 0
+            else None,
+            "jit_speedup": interp_run["wall"] / jit_run["wall"]
+            if jit_run["wall"] > 0
+            else None,
+            "code_match": native_run["codes"] == jit_run["codes"] == interp_run["codes"],
         }
         results["programs"].append(entry)
         print(
             f"  native run {native_run['wall']*1000:.1f} ms | "
-            f"interp run {interp_run['wall']*1000:.1f} ms | "
-            f"slowdown {entry['slowdown']:.1f}x",
+            f"jit run {jit_run['wall']*1000:.1f} ms | "
+            f"interp-only {interp_run['wall']*1000:.1f} ms | "
+            f"slowdown {entry['slowdown']:.1f}x | jit speedup {entry['jit_speedup']:.1f}x",
             flush=True,
         )
 
@@ -250,12 +261,12 @@ def render_markdown(res):
     lines.append("## Runtime phase (per program)\n")
     lines.append(
         "| program | native wall | native CPU | native CPU% | native RSS | "
-        "minirust wall | minirust CPU | minirust CPU% | minirust RSS | slowdown |"
+        "minirust (JIT) wall | CPU | CPU% | RSS | slowdown |"
     )
     lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for p in res["programs"]:
         n = p["native_run"]
-        i = p["interp_run"]
+        i = p.get("jit_run", p["interp_run"])
         lines.append(
             f"| {p['name']} | {fmt_ms(n['wall'])} ms | {fmt_ms(n['cpu'])} ms | "
             f"{n['cpu_pct']:.0f}% | {rss_mb(n['rss_kb']):.1f} MB | "
@@ -263,12 +274,32 @@ def render_markdown(res):
             f"{rss_mb(i['rss_kb']):.1f} MB | {p['slowdown']:.1f}x |"
         )
 
+    lines.append("\n## JIT effect (same binary, `--no-jit` vs JIT)\n")
+    lines.append(
+        "| program | interpreter only | with JIT | JIT speedup | native | JIT vs native |"
+    )
+    lines.append("|---|---:|---:|---:|---:|---:|")
+    for p in res["programs"]:
+        i = p["interp_run"]
+        j = p.get("jit_run", i)
+        n = p["native_run"]
+        lines.append(
+            f"| {p['name']} | {fmt_ms(i['wall'])} ms | {fmt_ms(j['wall'])} ms | "
+            f"{(i['wall']/j['wall'] if j['wall'] > 0 else 1):.2f}x | "
+            f"{fmt_ms(n['wall'])} ms | {p['slowdown']:.1f}x |"
+        )
+    lines.append(
+        "\nThe JIT only covers functions whose parameters, locals, calls and "
+        "return value are all integers (no division, no methods, no Vec/String). "
+        "Everything else keeps running in the interpreter.\n"
+    )
+
     lines.append("\n## End-to-end (source -> output)\n")
     lines.append("| program | rustc compile + run | minirust front-end + run | ratio |")
     lines.append("|---|---:|---:|---:|")
     for p in res["programs"]:
         native_total = p["native_compile"]["wall"] + p["native_run"]["wall"]
-        interp_total = p["front_end"]["wall"] + p["interp_run"]["wall"]
+        interp_total = p["front_end"]["wall"] + p.get("jit_run", p["interp_run"])["wall"]
         ratio = interp_total / native_total
         label = f"{ratio:.2f}x" if ratio >= 1 else f"1/{1/ratio:.1f} faster"
         lines.append(
@@ -277,12 +308,16 @@ def render_markdown(res):
         )
 
     geo = 1.0
+    interp_geo = 1.0
     for p in res["programs"]:
         geo *= max(p["slowdown"], 1e-9)
-    geo = geo ** (1.0 / len(res["programs"]))
+        interp_geo *= max(p.get("interp_slowdown") or p["slowdown"], 1e-9)
+    n = len(res["programs"])
+    geo = geo ** (1.0 / n)
+    interp_geo = interp_geo ** (1.0 / n)
     lines.append(
-        f"\nGeometric-mean runtime slowdown across the {len(res['programs'])} programs: "
-        f"**{geo:.1f}x**.\n"
+        f"\nGeometric-mean runtime slowdown across the {n} programs: "
+        f"**{geo:.1f}x** with the JIT, **{interp_geo:.1f}x** interpreter-only.\n"
     )
     lines.append(
         "All programs produced identical output and exit code under both engines "

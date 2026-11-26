@@ -295,16 +295,18 @@ impl Parser {
             }
         }
         self.expect_punct(")")?;
-        if self.eat_punct("->") {
-            let _ = self.parse_type()?;
-        }
+        let ret = if self.eat_punct("->") {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
         if self.eat_kw("where") {
             while !self.is_punct("{") && !matches!(self.tok(), Tok::Eof) {
                 self.bump();
             }
         }
         let body = self.parse_block()?;
-        Ok(FuncAst { name, params, body })
+        Ok(FuncAst { name, params, ret, body })
     }
 
     // ---------- types ----------

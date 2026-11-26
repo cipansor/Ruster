@@ -183,6 +183,7 @@ pub enum Expr {
 pub struct FuncAst {
     pub name: String,
     pub params: Vec<(Pat, Option<Type>)>,
+    pub ret: Option<Type>,
     pub body: Block,
 }
 
