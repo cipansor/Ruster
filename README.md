@@ -1,57 +1,69 @@
-# Ruster — interpreter Rust + JIT x86-64 dalam satu binary, tanpa cargo
+# Ruster — a Rust interpreter and x86-64 JIT in one binary, without Cargo
 
 [![CI](https://github.com/cipansor/Ruster/actions/workflows/ci.yml/badge.svg)](https://github.com/cipansor/Ruster/actions/workflows/ci.yml)
 
-> **Ruster** adalah singkatan dari **Rust Interpreter** — nama proyeknya, bukan
-> nama bahasa yang diinterpretasi.
+> **Ruster** is short for **Rust Interpreter**. It is the project's name, not
+> the name of the language being interpreted.
 
-Eksperimen: seberapa jauh implementasi Rust dari nol (tanpa LLVM, tanpa crate
-eksternal, tanpa cargo) bisa mendekati kecepatan Rust native — dan apa yang
-terjadi kalau kita menambahkan JIT sendiri?
+An experiment: how close can a from-scratch Rust implementation get to native
+Rust speed without LLVM, without external crates, and without Cargo — and what
+happens when we add our own JIT on top?
 
-Sekarang ada dua mesin di dalam satu binary:
+The single binary now contains two engines:
 
-1. **Interpreter bytecode** untuk seluruh subset bahasa.
-2. **JIT x86-64 baseline** yang menulis kode mesin untuk fungsi-fungsi yang
-   seluruh parameter, lokal, pemanggilan, dan nilai kembaliannya integer.
+1. **A bytecode interpreter** that runs the whole language subset.
+2. **A baseline x86-64 JIT** that emits machine code for functions whose
+   parameters, locals, calls, and return values are all integers.
 
-Hasilnya (8 program benchmark, 5 run, median):
+Representative results (8 benchmark programs, 5 runs, median):
 
-| Metrik | Hasil |
+| Metric | Result |
 |---|---|
-| Geometric-mean slowdown, interpreter saja | **40.0x** vs native |
-| Geometric-mean slowdown, dengan JIT | **10.8x** vs native |
-| Fungsi integer murni (fib, loop 10M, collatz) | **3.1x–3.9x** vs native |
-| Kode berat `Vec`/indeks (sieve, matmul, quicksort) | 50x–82x vs native |
-| Fase "compile" (lex+parse+bytecode) | **~1 ms**, 15.9 MB RAM (vs 73–125 ms, 90–111 MB untuk `rustc -O`) |
-| Ukuran | 4.9 MB satu binary untuk semua program (native: 4.3 MB per program) |
+| Geometric-mean slowdown, interpreter only | **40.0x** vs native |
+| Geometric-mean slowdown, with the JIT | **10.8x** vs native |
+| Pure integer functions (fib, 10M loop, collatz) | **3.1x–4.1x** vs native |
+| `Vec`/index-heavy code (sieve, matmul, quicksort) | ~50x–88x vs native |
+| "Compile" phase (lex + parse + bytecode) | **~1 ms**, ~16 MB RSS (vs 73–125 ms, 90–111 MB for `rustc -O`) |
+| Size | 4.9 MB for one binary that runs every program (native: 4.3 MB per program) |
 
-Jadi: JIT memangkas jarak dari ~40x menjadi ~10.8x, dan untuk kode integer murni
-kita berada di **3–4x native** — bukan native, tapi jauh lebih dekat daripada
-interpreter mana pun yang saya tulis sebelumnya. Sisa jarak besar ada di kode
-yang mengindeks `Vec`/`String`, yang belum dicakup JIT.
+So the JIT closes the gap from ~40x to ~10.8x, and for pure integer code we are
+at **3–4x native** — not native, but much closer than any interpreter I had
+written before. The remaining gap is concentrated in code that indexes
+`Vec`/`String`, which the JIT does not cover yet.
+
+## Table of contents
+
+1. [Build and usage](#1-build-and-usage)
+2. [Architecture](#2-architecture)
+3. [Supported language subset](#3-supported-language-subset)
+4. [Benchmark results](#4-benchmark-results)
+5. [Analysis: where does the gap come from?](#5-analysis-where-does-the-gap-come-from)
+6. [Semantic deviations](#6-semantic-deviations)
+7. [Bytecode example](#7-bytecode-example)
+8. [Repository layout](#8-repository-layout)
+9. [Roadmap and limitations](#9-roadmap-and-limitations)
 
 ---
 
-## 1. Build & pakai
+## 1. Build and usage
 
-Tidak perlu cargo. Cukup `rustc`:
+No Cargo required. All you need is `rustc`:
 
 ```bash
 rustc --edition 2021 -O ruster/src/main.rs -o bin/rust
 ```
 
-Lalu:
+Then:
 
 ```bash
 $ bin/rust hello.rs
-Halo, dunia! 1 + 1 = 2
+Hello, world! 1 + 1 = 2
 
-$ bin/rust hello                 # ekstensi .rs otomatis dicoba
-Halo, dunia! 1 + 1 = 2
+$ bin/rust hello                 # the .rs extension is tried automatically
+Hello, world! 1 + 1 = 2
 
 $ bin/rust --stats hello.rs
-Halo, dunia! 1 + 1 = 2
+Hello, world! 1 + 1 = 2
 Ruster stats: front-end 0.019 ms, run 0.017 ms
 Ruster jit: no functions were eligible
 
@@ -69,164 +81,174 @@ fn fib [0] params=1 locals=1
   ...
 ```
 
-Opsi lain: `--no-jit` (paksa interpreter saja), `--version`, `--help`.
-Variabel lingkungan `MINIRUST_NO_JIT=1` melakukan hal yang sama.
+Other options: `--no-jit` (force the interpreter only), `--version`, `--help`.
+The environment variable `MINIRUST_NO_JIT=1` does the same as `--no-jit`.
 
-Kalau ingin benar-benar dipanggil `rust hallo.rs`:
+To invoke it as `rust hello.rs`:
 
 ```bash
 install -m755 bin/rust ~/.local/bin/rust
 ```
 
-Tidak ada dependency runtime dan tidak ada file pendamping.
+There are no runtime dependencies and no companion files.
 
-### Menjalankan test
+### Running the tests
 
 ```bash
-# 12 program fitur: rustc vs Ruster (JIT) vs Ruster --no-jit
+# 18 feature programs: rustc vs Ruster (JIT) vs Ruster --no-jit
 python3 tests/compare.py
 
-# 4 kasus error: exit code 101 (panic) / 3 (process::exit)
+# 4 error cases: exit code 101 (panic) / 3 (process::exit)
 python3 tests/errors.py
+
+# Assert that recursive call cycles stay in the interpreter (x86-64 only)
+python3 tests/jit_fallback.py
 ```
 
-`compare.py` menjalankan ketiga mesin dan menuntut stdout + exit code identik.
-Itu berarti jalur JIT dan jalur interpreter divalidasi silang, bukan hanya
-dibandingkan dengan rustc.
+`compare.py` runs all three engines and requires identical stdout and exit
+codes. That cross-validates the JIT path against the interpreter path, not just
+against `rustc`. `jit_fallback.py` reads the JIT function list from `--stats`
+and checks that direct and mutual recursion are never JIT-compiled while an
+acyclic function still is.
 
-### Menjalankan benchmark
+### Running the benchmarks
 
 ```bash
 python3 bench/bench.py --runs 5 --compile-runs 5
-# hasil: bench/results.md dan bench/results.json
+# writes bench/results.md and bench/results.json
 ```
 
-Harness memakai Python hanya untuk mengukur (`fork/exec` + `os.wait4`), bukan
-bagian dari runtime. Setiap program diukur tiga kali: native, Ruster (JIT),
-dan Ruster `--no-jit`.
+The harness uses Python only for measurement (`fork`/`exec` + `os.wait4`); it is
+not part of the runtime. Each program is measured three ways: native, Ruster
+with the JIT, and Ruster with `--no-jit`.
 
 ---
 
-## 2. Arsitektur
+## 2. Architecture
 
 ```
-sumber .rs
+.rs source
    |
    v
-lexer.rs     -> token
+lexer.rs     -> tokens
    |
    v
 parser.rs    -> AST
    |
    v
-compiler.rs  -> bytecode stack-based + const eval + peephole optimizer
+compiler.rs  -> stack-based bytecode + const eval + peephole optimizer
    |
-   +--> jit.rs   (fungsi integer murni)  -> kode mesin x86-64
+   +--> jit.rs   (pure integer functions) -> x86-64 machine code
    |
    v
-vm.rs        -> interpreter frame-stack; memanggil JIT bila memungkinkan
+vm.rs        -> frame-stack interpreter; calls JIT-compiled code when possible
 ```
 
 ### Interpreter
 
-- Bytecode stack machine; lokal adalah indeks slot, bukan lookup nama.
-- Frame stack eksplisit (`Vec<Frame>` + `Vec<Value>` datar), jadi rekursi
-  100.000 level jalan tanpa membebani stack host.
-- Peephole optimizer memfusikan pola umum:
+- Stack-based bytecode machine; locals are slot indices, not name lookups.
+- An explicit frame stack (`Vec<Frame>` plus a flat `Vec<Value>`), so 100,000
+  levels of recursion run without touching the host stack.
+- A peephole optimizer fuses common patterns:
   - `Load a; Load b; Bin op; Store c` -> `BinLocals`
   - `Load a; Imm k; Bin op; Store c` -> `BinLocalImm`
   - `Load a; Load b; Bin op` -> `PushBinLocals`
   - `Load a; Imm k; Bin op` -> `PushBinLocalImm`
   - `Imm k; Bin op` -> `TopBinImm`
   - `Bin op; Store d` -> `BinStore`
-  - `Imm a; Imm b; Bin op` -> `FoldImm` (konstanta)
-  - bandingkan + lompat -> `CmpJump` / `CmpImmJump`
-  - `Load v; Load i; Index` -> `IndexL` (cast `as usize`-nya ikut di dalam op)
-  - `Load v; Load i; Load x; IndexSet` -> `IndexSetLL` (+ varian `LI`/`LC`)
-  - `v[i] op= x` -> `IndexRmw` (satu dispatch, bukan tujuh)
-  - `v[i] = v[j]` -> `IndexSetFromIndex` (enam opcode menjadi satu)
+  - `Imm a; Imm b; Bin op` -> `FoldImm` (constant folding)
+  - compare + jump -> `CmpJump` / `CmpImmJump`
+  - `Load v; Load i; Index` -> `IndexL` (the `as usize` cast is folded in)
+  - `Load v; Load i; Load x; IndexSet` -> `IndexSetLL` (plus `LI`/`LC` variants)
+  - `v[i] op= x` -> `IndexRmw` (one dispatch instead of seven)
+  - `v[i] = v[j]` -> `IndexSetFromIndex` (six opcodes become one)
   - `Load src; Store dst` -> `CopyLocal`
-  - `Unit; Pop` -> dihapus (kecuali `Pop` adalah titik merge lompatan)
-- Semua fusi memeriksa apakah ada lompatan yang menargetkan instruksi di
-  tengah pola; kalau ada, fusi dibatalkan. Ini penting: satu bug awal membuat
-  `if/else` kehilangan `Pop` milik satu cabang.
+  - `Unit; Pop` -> removed (unless the `Pop` is a jump merge point)
+- Every fusion checks whether a jump targets an instruction inside the pattern;
+  if so, the fusion is skipped. This matters: an early bug made `if/else` lose
+  the `Pop` belonging to one branch.
 
-### JIT x86-64 (`jit.rs`, ~650 baris, tanpa crate)
+### x86-64 JIT (`jit.rs`, ~760 lines, no crates)
 
-Semua encoder ditulis manual; tidak ada Cranelift/LLVM.
+Every encoder is written by hand; there is no Cranelift or LLVM.
 
-**Syarat kelayakan (dicek per fungsi, fixed point atas graf panggilan):**
+**Eligibility (checked per function, fixed point over the call graph):**
 
-- semua parameter dan tipe kembali adalah tipe integer;
-- maksimal 6 parameter dan 5 lokal;
-- bytecode hanya berisi: `Imm`, `Load`, `Store`, `Pop`, `FoldImm`, `Bin`
-  (`+ - * & | ^ << >> == != < <= > >=`), `Un(Neg)`, semua varian jump/fusi,
-  `Call` ke fungsi yang juga layak, dan `Return`;
-- tidak ada `Div`/`Rem` (perlu cek pembagi nol), tidak ada method, `Vec`,
-  `String`, global, atau `Unit` (fungsi harus mengembalikan integer).
+- all parameters and the return type are integer types;
+- at most 6 parameters and 5 locals;
+- the bytecode contains only `Imm`, `Load`, `Store`, `Pop`, `FoldImm`, `Bin`
+  (`+ - * & | ^ << >> == != < <= > >=`), `Un(Neg)`, all jump/fusion variants,
+  `Call` to another eligible function, and `Return`;
+- no `Div`/`Rem` (they need a division-by-zero check), no methods, `Vec`,
+  `String`, globals, or `Unit` (the function must return an integer).
 
-**Codegen:**
+**Code generation:**
 
-- Lokal dipetakan ke register callee-saved: `rbx, r12, r13, r14, r15`.
-  Parameter SysV (`rdi, rsi, rdx, rcx, r8, r9`) disalin ke register lokal di
-  prologue.
-- Operand stack tetap di frame (`[rbp-8*(d+1)]`), sehingga register lokal tidak
-  terganggu oleh operasi sementara.
-- Perbandingan memakai `cmp` + `setcc` + `movzx`; cabang memakai `jcc rel32`
-  yang ditambal setelah semua offset diketahui.
-- Pemanggilan: argumen diambil dari operand stack ke register SysV, lalu
-  `mov rax, <ptr>; call rax`. Alamat fungsi ditambal setelah semua halaman
-  dialokasikan, jadi rekursi dan panggilan silang bekerja.
-- Frame selalu 16-byte aligned, jadi panggilan mematuhi ABI SysV.
-- Kode ditulis ke halaman `mmap` anonim, lalu `mprotect(PROT_READ|PROT_EXEC)`
-  setelah final (W^X). Tidak ada halaman yang tetap writable+executable.
-- Kalau pemanggilan dari interpreter memiliki argumen non-`Int`, VM jatuh ke
-  jalur interpreter untuk panggilan itu (per call, bukan per program).
+- Locals map to callee-saved registers: `rbx, r12, r13, r14, r15`. SysV
+  parameters (`rdi, rsi, rdx, rcx, r8, r9`) are copied into the local registers
+  in the prologue.
+- The operand stack stays in the frame (`[rbp-8*(d+1)]`), so temporary
+  operations do not clobber the local registers.
+- Comparisons use `cmp` + `setcc` + `movzx`; branches use `jcc rel32`, patched
+  once all offsets are known.
+- Calls take arguments from the operand stack into SysV registers, then
+  `mov rax, <ptr>; call rax`. Function addresses are patched after every page is
+  allocated, so recursion and cross-calls work.
+- Frames are always 16-byte aligned, so calls obey the SysV ABI.
+- Code is written to anonymous `mmap` pages, then `mprotect(PROT_READ|PROT_EXEC)`
+  after finalization (W^X). No page stays writable and executable.
+- If a call from the interpreter has a non-`Int` argument, the VM falls back to
+  the interpreter for that call (per call, not per program).
 
-### Representasi `Vec` (packed)
+Call cycles (direct or mutual recursion) are detected with one Tarjan SCC pass
+and excluded from the JIT, because generated code has no native stack-depth
+guard.
 
-`Value::Vec` menyimpan `Rc<RefCell<VecData>>`, dan `VecData` punya tiga mode:
-`Vec<Value>` generik, `Vec<i64>` terpaket, atau `Vec<bool>` terpaket.
-`vec![0; n]` / `vec![true; n]` langsung membuat buffer skalar, sehingga indeks
-tidak lagi menyentuh `Value` 16 byte. Method yang tidak punya jalur packed
-(`sort`, `insert`, ...) mengubah isi sel yang sama menjadi `Vec<Value>` sekali
-saja, jadi identitas `Rc` dan mutasi tetap benar. Efek terukur: RSS sieve 1M
-turun dari 18.0 MB ke 15.6 MB, dan index loop sedikit lebih cepat.
+### `Vec` representation (packed)
 
-Konsekuensinya: `fib`, loop integer, dan collatz berjalan sebagai kode mesin;
-sieve/matmul/quicksort tetap di interpreter karena mengindeks `Vec`.
+`Value::Vec` stores an `Rc<RefCell<VecData>>`, and `VecData` has three modes:
+generic `Vec<Value>`, packed `Vec<i64>`, or packed `Vec<bool>`.
+`vec![0; n]` / `vec![true; n]` create a scalar buffer directly, so indexing no
+longer touches 16-byte `Value`s. Methods without a packed path (`sort`,
+`insert`, ...) convert the contents of the same cell to `Vec<Value>` once, so
+`Rc` identity and mutation stay correct. Measured effect: sieve 1M RSS drops
+from 18.0 MB to 15.6 MB, and the index loop gets slightly faster.
+
+Consequence: `fib`, integer loops, and collatz run as machine code;
+sieve/matmul/quicksort stay in the interpreter because they index `Vec`.
 
 ---
 
-## 3. Subset bahasa yang didukung
+## 3. Supported language subset
 
-| Kategori | Yang didukung |
+| Category | Supported |
 |---|---|
-| Item | `fn`, `const`, `static`/`static mut`, `mod { ... }` inline, `use` (diabaikan) |
-| Tipe | `i8..i64`, `u8..u64`, `usize`/`isize`, `f32`/`f64`, `bool`, `char`, `String`, `&str`, `Vec<T>`, array `[T; N]`, tuple, referensi `&T`/`&mut T` |
-| Statement | `let` (+`mut`, anotasi tipe, destructuring tuple), blok, `if`/`else if`/`else`, `while`, `loop`, `for i in a..b`/`a..=b`, `for x in vec`, `break`/`continue`, `loop` sebagai ekspresi + `break nilai` |
-| Ekspresi | aritmatika, bitwise, perbandingan, `&&`/`||` short-circuit, assignment & compound assignment, `as`, `&`/`&mut`/`*`, index `v[i]`, tuple `.0`, method call, macro |
-| Fungsi | rekursi, parameter, return; fungsi top-level dan di dalam `mod` inline |
-| Macro | `println!`, `print!`, `eprintln!`, `eprint!`, `format!`, `vec![]`, `vec![x; n]`, `panic!`, `assert!`, `assert_eq!`, `assert_ne!`, `dbg!`, `unreachable!`/`todo!`/`unimplemented!` |
-| Method | `len`, `is_empty`, `push`, `push_str`, `pop`, `clear`, `insert`, `remove`, `reverse`, `sort`, `contains`, `first`, `last`, `join`, `trim*`, `starts_with`, `ends_with`, `replace`, `repeat`, `to_uppercase`, `to_lowercase`, `split`, `split_whitespace`, `chars`, `abs`, `pow`, `powf`, `powi`, `sqrt`, `floor`, `ceil`, `round`, `min`, `max`, `clamp`, `signum`, `wrapping_*`, `saturating_*`, `to_string`, `clone`, `.iter()/.into_iter()/.copied()/.as_str()` |
-| Associated | `String::new/from/with_capacity`, `Vec::new/with_capacity`, `std::process::exit` |
-| Konstanta path | `i64::MAX/MIN`, `u8::MAX`, `f64::PI/E/INFINITY/NAN/...` |
+| Items | `fn`, `const`, `static`/`static mut`, inline `mod { ... }`, `use` (ignored) |
+| Types | `i8..i64`, `u8..u64`, `usize`/`isize`, `f32`/`f64`, `bool`, `char`, `String`, `&str`, `Vec<T>`, arrays `[T; N]`, tuples, references `&T`/`&mut T` |
+| Statements | `let` (+`mut`, type annotations, tuple destructuring), blocks, `if`/`else if`/`else`, `while`, `loop`, `for i in a..b`/`a..=b`, `for x in vec`, `break`/`continue`, `loop` as an expression + `break value` |
+| Expressions | arithmetic, bitwise, comparison, short-circuit `&&`/`||`, assignment and compound assignment, `as`, `&`/`&mut`/`*`, indexing `v[i]`, tuple `.0`, method calls, macros |
+| Functions | recursion, parameters, return; top-level functions and functions inside inline `mod` |
+| Macros | `println!`, `print!`, `eprintln!`, `eprint!`, `format!`, `vec![]`, `vec![x; n]`, `panic!`, `assert!`, `assert_eq!`, `assert_ne!`, `dbg!`, `unreachable!`/`todo!`/`unimplemented!` |
+| Methods | `len`, `is_empty`, `push`, `push_str`, `pop`, `clear`, `insert`, `remove`, `reverse`, `sort`, `contains`, `first`, `last`, `join`, `trim*`, `starts_with`, `ends_with`, `replace`, `repeat`, `to_uppercase`, `to_lowercase`, `split`, `split_whitespace`, `chars`, `abs`, `pow`, `powf`, `powi`, `sqrt`, `floor`, `ceil`, `round`, `min`, `max`, `clamp`, `signum`, `wrapping_*`, `saturating_*`, `to_string`, `clone`, `.iter()/.into_iter()/.copied()/.as_str()` |
+| Associated functions | `String::new/from/with_capacity`, `Vec::new/with_capacity`, `std::process::exit` |
+| Path constants | `i64::MAX/MIN`, `u8::MAX`, `f64::PI/E/INFINITY/NAN/...` |
 
-**Tidak didukung:** `struct`, `enum`, `impl`, `trait`, closure, adapter
-iterator (`map`/`filter`/`fold`), `Option`/`Result` dan `?`, `match`, slicing,
-`HashMap`, borrow checker, lifetime, generic nyata, file modul terpisah.
+**Not supported:** `struct`, `enum`, `impl`, `trait`, closures, iterator
+adapters (`map`/`filter`/`fold`), `Option`/`Result` and `?`, `match`, slicing,
+`HashMap`, the borrow checker, lifetimes, real generics, and separate module
+files.
 
-**Subset JIT** jauh lebih kecil dari subset interpreter: hanya fungsi integer
-tanpa pembagian, tanpa akses `Vec`/`String`, maksimal 5 lokal.
+**The JIT subset** is much smaller than the interpreter subset: integer
+functions only, no division, no `Vec`/`String` access, at most 5 locals.
 
 ---
 
-## 4. Hasil benchmark
+## 4. Benchmark results
 
-Lingkungan: Linux x86-64, 4 vCPU container, `rustc 1.100.0`, `-O`. Setiap
-program: 5 kompilasi, 5 eksekusi; median wall/CPU, peak RSS maksimum.
+Environment: Linux x86-64, 4-vCPU container, `rustc 1.100.0`, `-O`. Each
+program: 5 compilations and 5 executions; median wall/CPU, maximum peak RSS.
 
-### 4.1 Fase kompilasi (per program)
+### 4.1 Compile phase (per program)
 
 | program | rustc -O wall | rustc CPU | rustc RSS | native binary | Ruster front-end wall | front-end CPU | front-end RSS |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -239,13 +261,14 @@ program: 5 kompilasi, 5 eksekusi; median wall/CPU, peak RSS maksimum.
 | quicksort | 101.9 ms | 117.0 ms | 107.8 MB | 4.3 MB | 1.1 ms | 1.1 ms | 15.8 MB |
 | strings | 115.9 ms | 131.4 ms | 111.2 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.8 MB |
 
-"Front-end" = lex + parse + bytecode + evaluasi `const`, diukur lewat
-`rust --compile-only`. Tidak ada kode native yang dihasilkan pada tahap ini.
+"Front-end" means lexing + parsing + bytecode generation + `const` evaluation,
+measured through `rust --compile-only`. No native code is produced at this
+stage.
 
-Build interpreter sekali saja: `rustc -O` = **2.4 s wall, 6.8 s CPU (paralel),
-251 MB RSS**.
+Building the interpreter once: `rustc -O` = **2.4 s wall, 6.8 s CPU
+(parallel), 251 MB RSS**.
 
-### 4.2 Fase runtime (dengan JIT)
+### 4.2 Runtime phase (with the JIT)
 
 | program | native wall | native CPU | native CPU% | native RSS | Ruster (JIT) wall | CPU | CPU% | RSS | slowdown |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -258,12 +281,12 @@ Build interpreter sekali saja: `rustc -O` = **2.4 s wall, 6.8 s CPU (paralel),
 | quicksort | 4.3 ms | 4.1 ms | 97% | 15.8 MB | 213.5 ms | 213.0 ms | 100% | 15.8 MB | 50.0x |
 | strings | 1.2 ms | 1.1 ms | 93% | 15.8 MB | 12.6 ms | 12.4 ms | 99% | 15.8 MB | 10.7x |
 
-CPU usage interpreter ~99–100% (single-thread). `rustc` bisa >100% karena
-kompilasi paralel.
+Interpreter CPU usage is ~99–100% (single-threaded). `rustc` can exceed 100%
+because it compiles in parallel.
 
-### 4.3 Efek JIT (binary yang sama, `--no-jit` vs JIT)
+### 4.3 Effect of the JIT (same binary, `--no-jit` vs JIT)
 
-| program | interpreter saja | dengan JIT | speedup JIT | native | JIT vs native |
+| program | interpreter only | with JIT | JIT speedup | native | JIT vs native |
 |---|---:|---:|---:|---:|---:|
 | hello | 1.0 ms | 1.0 ms | 1.00x | 0.8 ms | 1.2x |
 | fib | 190.6 ms | 9.4 ms | 20.17x | 3.0 ms | 3.2x |
@@ -274,160 +297,161 @@ kompilasi paralel.
 | quicksort | 212.9 ms | 213.5 ms | 1.00x | 4.3 ms | 50.0x |
 | strings | 12.5 ms | 12.6 ms | 1.00x | 1.2 ms | 10.7x |
 
-### 4.4 End-to-end (sumber -> output)
+### 4.4 End-to-end (source -> output)
 
-| program | rustc compile + run | Ruster front-end + run | ratio |
+| program | rustc compile + run | Ruster front-end + run | Ruster vs rustc |
 |---|---:|---:|---:|
-| hello | 72.7 ms | 2.0 ms | 1/36.8 faster |
-| fib | 78.0 ms | 10.5 ms | 1/7.4 faster |
-| loop_sum | 79.4 ms | 15.6 ms | 1/5.1 faster |
-| collatz | 99.3 ms | 71.5 ms | 1/1.4 faster |
-| sieve | 98.2 ms | 190.5 ms | 1.94x |
-| matmul | 125.3 ms | 161.4 ms | 1.29x |
-| quicksort | 106.2 ms | 214.6 ms | 2.02x |
-| strings | 117.0 ms | 13.7 ms | 1/8.6 faster |
+| hello | 72.7 ms | 2.0 ms | 36.8x faster |
+| fib | 78.0 ms | 10.5 ms | 7.4x faster |
+| loop_sum | 79.4 ms | 15.6 ms | 5.1x faster |
+| collatz | 99.3 ms | 71.5 ms | 1.4x faster |
+| sieve | 98.2 ms | 190.5 ms | 1.94x slower |
+| matmul | 125.3 ms | 161.4 ms | 1.29x slower |
+| quicksort | 106.2 ms | 214.6 ms | 2.02x slower |
+| strings | 117.0 ms | 13.7 ms | 8.6x faster |
 
-**Geometric-mean slowdown runtime: 10.8x dengan JIT, 40.0x tanpa JIT.**
+**Geometric-mean runtime slowdown: 10.8x with the JIT, 40.0x without.**
 
-Karena `rustc -O` makan 73–125 ms per program, Ruster menang end-to-end untuk
-program yang berjalan singkat — sekarang termasuk fib dan loop 10 juta iterasi.
+Because `rustc -O` takes 73–125 ms per program, Ruster wins end-to-end for
+short-running programs — now including fib and the 10-million-iteration loop.
 
-### 4.5 Ukuran & memori
+### 4.5 Size and memory
 
-| hal | native | Ruster |
+| Aspect | native | Ruster |
 |---|---:|---:|
-| binary hello | 4.3 MB | 4.9 MB (satu binary untuk semua) |
-| binary quicksort | 4.3 MB | 4.9 MB |
-| RSS saat kompilasi | 90–111 MB | 15.9 MB |
-| RSS runtime (hello) | 15.6 MB | 15.6 MB |
-| RSS runtime (sieve 1M bool) | 15.6 MB | 15.6 MB |
+| hello binary | 4.3 MB | 4.9 MB (one binary for every program) |
+| quicksort binary | 4.3 MB | 4.9 MB |
+| RSS during compilation | 90–111 MB | 15.9 MB |
+| Runtime RSS (hello) | 15.6 MB | 15.6 MB |
+| Runtime RSS (sieve, 1M bools) | 15.6 MB | 15.6 MB |
 
-Catatan: `Vec<bool>` di Ruster menyimpan satu `Value` 16 byte per elemen,
-bukan 1 bit/byte seperti Rust. Native 4.3 MB sebagian besar adalah Rust std
-yang di-link statis; Ruster 4.9 MB juga sebagian besar std, tetapi satu
-binary menjalankan semua program tanpa kompilasi per program.
+Note: `Vec<bool>` in Ruster stores one 16-byte `Value` per element, not 1 bit or
+1 byte as in Rust. The native 4.3 MB is mostly statically linked Rust std;
+Ruster's 4.9 MB is also mostly std, but one binary runs every program without
+per-program compilation.
 
 ---
 
-## 5. Analisis: di mana jaraknya sekarang?
+## 5. Analysis: where does the gap come from?
 
 ### 5.1 Interpreter (40.0x)
 
-Penyebab klasik: dispatch per instruksi, `Value` 16 byte ber-tag, tidak ada
-register allocation, tidak ada inlining/vektorisasi, dan `Rc`/`RefCell` untuk
-`Vec`/`String`. Loop `loop_sum` 10 juta iterasi butuh ~947 ms (≈94 ns/iterasi)
-karena setiap iterasi mengeksekusi ~7 bytecode dengan biaya ~10 ns masing-masing.
+The classic causes: per-instruction dispatch, 16-byte tagged `Value`s, no
+register allocation, no inlining or vectorization, and `Rc`/`RefCell` for
+`Vec`/`String`. The 10-million-iteration `loop_sum` takes ~935 ms
+(≈94 ns/iteration) because each iteration executes ~7 bytecodes at ~10 ns each.
 
-### 5.2 JIT integer (3.1–3.9x)
+### 5.2 Integer JIT (3.1–4.1x)
 
-JIT menghapus dispatch dan tag check: lokal di register, aritmetika langsung
-`add/sub/imul`, cabang `cmp+jcc`. Hasilnya 20–68x lebih cepat dari interpreter.
+The JIT removes dispatch and tag checks: locals live in registers, arithmetic
+is direct `add/sub/imul`, and branches are `cmp+jcc`. The result is 20–68x
+faster than the interpreter.
 
-Sisa 3–4x berasal dari:
+The remaining 3–4x comes from:
 
-- **Operand stack masih di memori.** Setiap ekspresi menulis/membaca slot
-  stack, bukan register.
-- **Tidak ada alokasi register untuk nilai sementara**, tidak ada common
-  subexpression elimination, tidak ada inlining.
-- **Tidak ada vektorisasi.** `loop_sum` native 3.6 ms untuk 10 juta iterasi
-  (≈0.36 ns/iterasi) karena LLVM memvektorisasi; JIT kita 14.1 ms
-  (≈1.4 ns/iterasi) — hanya ~4x lebih lambat, tetapi tetap bukan SIMD.
-- **Pemanggilan tidak di-inline.** `fib` tetap memanggil lewat `call rax`
-  (dengan patch alamat absolut), tanpa penyederhanaan rekursi.
+- **The operand stack is still in memory.** Every expression writes to and
+  reads from a stack slot instead of a register.
+- **No register allocation for temporaries**, no common-subexpression
+  elimination, and no inlining.
+- **No vectorization.** Native `loop_sum` takes 3.6 ms for 10 million iterations
+  (≈0.36 ns/iteration) because LLVM vectorizes it; our JIT takes 14.5 ms
+  (≈1.5 ns/iteration) — only ~4x slower, but still not SIMD.
+- **Calls are not inlined.** `fib` still calls through `call rax` (with an
+  absolute address patch), with no recursion simplification.
 
-Untuk kode integer murni, ini sudah "mendekati" native dalam arti yang masuk
-akal: 3x, bukan 100x.
+For pure integer code this is already "close to native" in a meaningful sense:
+3x, not 100x.
 
-### 5.3 Kode `Vec`/`String` (52–135x)
+### 5.3 `Vec`/`String` code (~50x–88x)
 
-Sieve, matmul, dan quicksort menghabiskan waktu di `Op::Index`/`Op::IndexSet`:
-cek tag `Value::Vec(Rc<RefCell<Vec<Value>>>)`, borrow dinamis, cek batas, clone
-`Value`, lalu aritmetika. JIT sengaja belum menangani ini karena memerlukan ABI
-`Value` ber-box dan helper runtime.
+Sieve, matmul, and quicksort spend their time in `Op::Index`/`Op::IndexSet`:
+checking the `Value::Vec(Rc<RefCell<Vec<Value>>>)` tag, dynamic borrow, bounds
+check, `Value` clone, then arithmetic. The JIT deliberately does not handle this
+yet because it needs a boxed `Value` ABI and runtime helpers.
 
-Fusi indeks (`IndexL`, `IndexSetLL/LI/LC`, `IndexJumpL`, `IndexRmw`,
-`IndexSetFromIndex`) memotong 2–5 dispatch per operasi indeks: sieve
-309 -> 218 ms dan matmul 227 -> 171 ms. Batas berikutnya adalah biaya
-`Value` 16 byte + `RefCell` per elemen, yang hanya bisa dilewati dengan
-representasi `Vec<i64>` khusus atau helper JIT.
+Index fusion (`IndexL`, `IndexSetLL/LI/LC`, `IndexJumpL`, `IndexRmw`,
+`IndexSetFromIndex`) removes 2–5 dispatches per index operation: sieve 309 ->
+218 ms and matmul 227 -> 171 ms. The next limit is the cost of a 16-byte
+`Value` + `RefCell` per element, which can only be avoided with a dedicated
+`Vec<i64>` representation or a JIT helper.
 
-Ini adalah **peluang optimasi terbesar berikutnya**:
+This is **the biggest remaining optimization opportunity**:
 
-1. Tambahkan opcode JIT untuk `Index`/`IndexSet` dengan inline cache
-   (layout `Rc<RefCell<Vec<Value>>>` + pengecekan tag sekali per loop), atau
-2. Buat JIT kedua dengan ABI `Value*` dan panggil helper untuk operasi non-int,
-3. Atau spesialisasikan `Vec<i64>` di interpreter (buffer `Vec<i64>` + tag
-   khusus) supaya index tidak lagi menyentuh `Value`.
+1. Add JIT opcodes for `Index`/`IndexSet` with inline caches (the
+   `Rc<RefCell<Vec<Value>>>` layout plus one tag check per loop), or
+2. Build a second JIT with a `Value*` ABI and call helpers for non-integer
+   operations, or
+3. Specialize `Vec<i64>` in the interpreter (a `Vec<i64>` buffer plus a special
+   tag) so indexing no longer touches `Value`.
 
-Perkiraan realistis: 5–20x lebih cepat untuk sieve/matmul/quicksort, yang akan
-menurunkan geometric mean ke kisaran 2–4x native.
+A realistic estimate: 5–20x faster for sieve/matmul/quicksort, which would bring
+the geometric mean to the 2–4x-native range.
 
-### 5.4 Kenapa bukan compile-to-native?
+### 5.4 Why not compile to native?
 
-Karena `rustc -O` sudah menjadi kompilasi native terbaik: 73–125 ms per
-program, lalu kecepatan penuh. Ruster menang hanya ketika biaya kompilasi
-itu lebih besar daripada penghematan runtime — yaitu untuk program yang
-selesai dalam beberapa milidetik. JIT adalah cara mendapatkan sebagian
-kecepatan native tanpa membayar kompilasi di depan; AOT (menghasilkan kode
-native lalu menyimpannya) akan menghapus startup JIT tetapi menambah
-kompleksitas cache.
+Because `rustc -O` is already the best native compiler: 73–125 ms per program,
+then full speed. Ruster only wins when that compilation cost is larger than the
+runtime savings — that is, for programs that finish in a few milliseconds. The
+JIT is a way to get part of native speed without paying compilation up front;
+AOT (emitting native code and caching it) would remove JIT startup but add cache
+complexity.
 
-### 5.5 Audit kompleksitas: linear vs kuadratik
+### 5.5 Complexity audit: linear vs quadratic
 
-Waktu diukur sebagai fungsi ukuran input (1x, 2x, 4x, 8x); rasio ~2.0 setiap
-dua kali lipat berarti linear.
+Time measured as a function of input size (1x, 2x, 4x, 8x); a ratio of ~2.0 per
+doubling means linear.
 
-| jalur | 1x | 2x | 4x | 8x | rasio | status |
+| path | 1x | 2x | 4x | 8x | ratio | status |
 |---|---:|---:|---:|---:|---|---|
-| `let` + lookup lokal (kompilasi) | 1.5 ms | 2.6 ms | 5.4 ms | 10.4 ms | 1.8–2.1 | linear |
-| rantai ekspresi panjang (kompilasi) | 0.9 ms | 1.9 ms | 3.9 ms | 7.8 ms | 2.0 | linear |
-| rantai `const` terbalik (kompilasi) | 2.5 ms | 4.9 ms | 9.9 ms | 19.7 ms | 2.0 | linear* |
-| loop integer (interpreter) | 8.8 ms | 16.9 ms | 34.1 ms | — | 1.9–2.0 | linear |
+| `let` + local lookup (compile) | 1.5 ms | 2.6 ms | 5.4 ms | 10.4 ms | 1.8–2.1 | linear |
+| long expression chain (compile) | 0.9 ms | 1.9 ms | 3.9 ms | 7.8 ms | 2.0 | linear |
+| reversed `const` chain (compile) | 2.5 ms | 4.9 ms | 9.9 ms | 19.7 ms | 2.0 | linear* |
+| integer loop (interpreter) | 8.8 ms | 16.9 ms | 34.1 ms | — | 1.9–2.0 | linear |
 | `Vec::push` (interpreter) | 17.5 ms | 34.1 ms | 76.8 ms | — | 2.0–2.3 | linear |
 | `String::push_str` (interpreter) | 15.6 ms | 29.6 ms | 59.5 ms | — | 1.9–2.0 | linear |
 
-\*Sebelum perbaikan: 500/1000/2000 const = 17.8/94.0/264.6 ms (kuadratik).
+\*Before the fix: 500/1000/2000 consts = 17.8/94.0/264.6 ms (quadratic).
 
-Dua kuadratik yang ditemukan dan diperbaiki:
+Two quadratic behaviours were found and fixed:
 
-1. **Lookup lokal** (`resolve_local`) memindai seluruh daftar lokal untuk setiap
-   identifier, jadi fungsi dengan banyak `let` menjadi O(n²) saat kompilasi.
-   Sekarang ada indeks `nama -> stack slot` (stack untuk shadowing); `scope_exit`
-   mem-pop slot yang keluar.
-2. **Resolusi `const`** memakai loop "coba semua yang belum selesai" sehingga
-   rantai yang ditulis terbalik (`const A = B + 1; const B = 1;`) butuh O(n)
-   pass. Sekarang resolusi on-demand rekursif + memo + `HashSet` untuk deteksi
-   siklus: linear.
+1. **Local lookup** (`resolve_local`) scanned the whole local list for every
+   identifier, so functions with many `let`s became O(n²) during compilation.
+   There is now a `name -> stack slot` index (a stack, for shadowing);
+   `scope_exit` pops the slots that leave scope.
+2. **`const` resolution** used a "retry everything unfinished" loop, so a chain
+   written in reverse (`const A = B + 1; const B = 1;`) needed O(n) passes. It
+   is now recursive on-demand resolution with memoization and a `HashSet` for
+   cycle detection: linear.
 
-Yang diaudit dan memang wajar: `sort` memakai `sort_by` (O(n log n)), `push_str`
-amortized O(1), method string lain didelegasikan ke `std`, `Vec::insert/remove`
-O(n) per operasi (sama seperti Rust; memakainya dalam loop memang O(n²) secara
-struktur data, bukan bug implementasi).
+Audited and found reasonable: `sort` uses `sort_by` (O(n log n)), `push_str` is
+amortized O(1), the other string methods delegate to `std`, and
+`Vec::insert/remove` are O(n) per operation (the same as Rust; using them in a
+loop is O(n²) by data-structure design, not an implementation bug).
 
 ---
 
-## 6. Deviasi semantik (penting)
+## 6. Semantic deviations
 
-| Hal | Rust | Ruster |
+| Aspect | Rust | Ruster |
 |---|---|---|
-| Lebar integer | `i8`/`u8`/... berbeda | semua disimpan `i64`; overflow membungkus |
-| `u64` > `i64::MAX` | nilai besar | bit pattern negatif; perbandingan bisa salah |
-| `f32` | 32-bit | disimpan `f64` |
-| Overflow | panic (debug) / wrap (release) | selalu wrap (interpreter dan JIT) |
-| Shift >= lebar | panic (debug) | dimask (`& 63`) |
-| Division by zero | panic | panic (exit 101); tidak didukung JIT |
-| `Vec::pop()` | `Option<T>` | nilai langsung / `()` jika kosong |
-| `first()`/`last()` | `Option<&T>` | nilai / `()` |
-| Borrow/move | dicek compiler | tidak ada; `let b = a;` berbagi `Rc` |
-| `static mut` | butuh `unsafe` | boleh di mana saja |
-| Struct/enum/match/closure | ada | tidak ada |
+| Integer width | `i8`/`u8`/... differ | all stored as `i64`; overflow wraps |
+| `u64` > `i64::MAX` | large value | negative bit pattern; comparisons can be wrong |
+| `f32` | 32-bit | stored as `f64` |
+| Overflow | panic (debug) / wrap (release) | always wraps (interpreter and JIT) |
+| Shift >= width | panic (debug) | masked (`& 63`) |
+| Division by zero | panic | panic (exit 101); not supported by the JIT |
+| `Vec::pop()` | `Option<T>` | direct value / `()` if empty |
+| `first()`/`last()` | `Option<&T>` | value / `()` |
+| Borrow/move | checked by the compiler | none; `let b = a;` shares the `Rc` |
+| `static mut` | requires `unsafe` | allowed anywhere |
+| Struct/enum/match/closure | available | not available |
 
-JIT mempertahankan semantik wrapping dan perbandingan signed `i64`; program
-yang memakai fitur di luar subset JIT tetap berjalan di interpreter.
+The JIT preserves wrapping semantics and signed `i64` comparisons; programs that
+use features outside the JIT subset keep running in the interpreter.
 
 ---
 
-## 7. Contoh bytecode
+## 7. Bytecode example
 
 ```text
 $ bin/rust --dump bench/programs/fib.rs
@@ -443,66 +467,72 @@ fn fib [0] params=1 locals=1
   0008  Return
 ```
 
-Sembilan instruksi untuk seluruh `fib`. Tanpa fusi, versi naifnya ~20
-instruksi. `CmpImmJump` adalah `Load; Imm; Bin(Lt); JumpF` yang digabung;
-`PushBinLocalImm` adalah `Load; Imm; Bin` yang mendorong hasil langsung.
+Nine instructions for all of `fib`. Without fusion, the naive version is ~20
+instructions. `CmpImmJump` is a fused `Load; Imm; Bin(Lt); JumpF`;
+`PushBinLocalImm` is a fused `Load; Imm; Bin` that pushes the result directly.
 
 ---
 
-## 8. Struktur repo
+## 8. Repository layout
 
 ```
 ruster/src/
   lexer.rs      tokenizer
-  ast.rs        AST + tipe
+  ast.rs        AST + types
   parser.rs     recursive descent
   compiler.rs   AST -> bytecode, const eval, peephole
-  ops.rs        semantik aritmatika/cast (VM & const eval)
-  value.rs      Value, perbandingan, format Rust-like
-  vm.rs         interpreter frame-stack + dispatch method + fallback JIT
-  jit.rs        x86-64 baseline JIT (encoder, mmap, eligibility)
+  ops.rs        arithmetic/cast semantics (VM and const eval)
+  value.rs      Value, comparisons, Rust-like formatting
+  vm.rs         frame-stack interpreter + method dispatch + JIT fallback
+  jit.rs        baseline x86-64 JIT (encoder, mmap, eligibility)
   main.rs       CLI
-bin/rust        hasil build (gitignored)
+bin/rust        build output (gitignored)
 bench/
-  programs/*.rs 8 program benchmark
+  programs/*.rs 8 benchmark programs
   bench.py      harness (wall, CPU, peak RSS, JIT vs --no-jit)
-  results.md    hasil terakhir
-  results.json  data mentah
+  results.md    latest results
+  results.json  raw data
 tests/
-  programs/*.rs 12 program fitur (dibandingkan dengan rustc, JIT dan no-JIT)
-  errors/*.rs   4 kasus error
-  compare.py    pembanding tiga mesin
-  errors.py     cek exit code
+  programs/*.rs 18 feature programs (compared with rustc, JIT, and no-JIT)
+  errors/*.rs   4 error cases
+  compare.py    three-engine differential runner
+  errors.py     exit-code checks
+  jit_fallback.py  asserts recursive cycles stay interpreted
 ```
 
-Ukuran sumber: ~5.500 baris Rust (compiler 1.680, jit 650, vm 790, parser 940,
-value 380, lexer 410, ops 270, ast 210, main 210).
+Source size: ~6,300 lines of Rust (compiler 2,009, parser 945, vm 872, jit 761,
+value 579, lexer 407, ops 275, ast 206, main 209).
 
 ---
 
-## 9. Roadmap
+## 9. Roadmap and limitations
 
-1. **JIT untuk `Vec`/array indexing** (dampak terbesar: sieve, matmul,
-   quicksort). Inline cache untuk tipe `Vec<i64>`, atau ABI `Value` ber-box
-   dengan helper runtime.
-2. **Register allocation untuk operand stack** di JIT (hilangkan traffic
-   memori per ekspresi), lalu inlining fungsi kecil.
-3. **Superinstruction loop** (`for` range -> satu opcode) dan strength
+1. **JIT for `Vec`/array indexing** (biggest impact: sieve, matmul, quicksort).
+   Inline caches for the `Vec<i64>` type, or a boxed `Value` ABI with runtime
+   helpers.
+2. **Register allocation for the operand stack** in the JIT (remove
+   per-expression memory traffic), then inline small functions.
+3. **Loop superinstructions** (range `for` -> one opcode) and strength
    reduction.
-4. **JIT untuk `f64`** (aritmetika SSE2) agar benchmark float ikut cepat.
-5. **AOT cache**: simpan bytecode/kode mesin ke disk; front-end sudah ~1 ms,
-   jadi ini lebih relevan untuk JIT startup pada program besar.
-6. **Perluas subset bahasa**: `struct`, `match`, closure, iterator adapter,
-   `Option`/`Result`.
+4. **JIT for `f64`** (SSE2 arithmetic) so float benchmarks get faster too.
+5. **AOT cache**: save bytecode/machine code to disk; the front end is already
+   ~1 ms, so this matters more for JIT startup on large programs.
+6. **Expand the language subset**: `struct`, `match`, closures, iterator
+   adapters, `Option`/`Result`.
 
-Sampai langkah 1 dikerjakan, angka 10.8x (dan 3–4x untuk kode integer) adalah
-batas jujur dari implementasi ini.
+Until step 1 is done, 10.8x (and 3–4x for integer code) is the honest limit of
+this implementation.
 
-### Batas subset (ditolak dengan pesan jelas)
+### Subset limits (rejected with clear messages)
 
-- `break`/`continue` berlabel (`break 'outer`) — tidak dimodelkan.
-- `*x = ...` (assignment lewat reference) — reference ke skalar dilewatkan
-  by value, jadi penulisan tidak akan sampai ke pemanggil.
-- Fungsi rekursif (langsung maupun tidak langsung) tetap dijalankan oleh
-  interpreter: JIT tidak punya penjaga kedalaman stack native, jadi rekursi
-  dalam hanya di-JIT untuk pemanggilan yang tidak bersiklus.
+- Labelled `break`/`continue` (`break 'outer`) — not modelled.
+- `*x = ...` (assignment through a reference) — references to scalars are
+  passed by value, so the write would not reach the caller.
+- Recursive functions (direct or indirect) stay in the interpreter: the JIT has
+  no native stack-depth guard, so only acyclic calls are JIT-compiled.
+
+---
+
+## License
+
+Ruster is released under the Apache License 2.0. See [LICENSE](LICENSE).
