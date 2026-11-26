@@ -497,3 +497,14 @@ value 380, lexer 410, ops 270, ast 210, main 210).
 
 Sampai langkah 1 dikerjakan, angka 10.8x (dan 3–4x untuk kode integer) adalah
 batas jujur dari implementasi ini.
+
+### Batas subset (ditolak dengan pesan jelas)
+
+- `break`/`continue` berlabel (`break 'outer`) — tidak dimodelkan.
+- `*x = ...` (assignment lewat reference) — reference ke skalar dilewatkan
+  by value, jadi penulisan tidak akan sampai ke pemanggil.
+- `break`/`continue` di dalam argumen pemanggilan fungsi — argumen yang sudah
+  di-push akan tertinggal; pakai variabel perantara.
+- Fungsi rekursif (langsung maupun tidak langsung) tetap dijalankan oleh
+  interpreter: JIT tidak punya penjaga kedalaman stack native, jadi rekursi
+  dalam hanya di-JIT untuk pemanggilan yang tidak bersiklus.
