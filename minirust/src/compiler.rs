@@ -122,7 +122,6 @@ pub enum Op {
     Load(u16),
     Store(u16),
     Pop,
-    Dup2,
     Bin(BinOp),
     Un(UnOp),
     Cast(CastTo),
@@ -181,6 +180,22 @@ pub enum Op {
     BinStore { op: BinOp, dst: u16 },
     /// Constant-folded integer expression.
     FoldImm(i64),
+    /// Fused `load src; store dst`.
+    CopyLocal { dst: u16, src: u16 },
+    /// Fused `load v; [cast] load i; index` (result pushed).
+    IndexL { v: u16, i: u16, cast: Option<IntKind> },
+    /// Fused `load v; index imm` (result pushed).
+    IndexImm { v: u16, imm: i64 },
+    /// Fused `load v; [cast] load i; load val; indexset`.
+    IndexSetLL { v: u16, i: u16, val: u16, cast: Option<IntKind> },
+    /// Fused `load v; [cast] load i; imm k; indexset`.
+    IndexSetLI { v: u16, i: u16, imm: i64, cast: Option<IntKind> },
+    /// Fused `load v; [cast] load i; const k; indexset`.
+    IndexSetLC { v: u16, i: u16, k: u32, cast: Option<IntKind> },
+    /// Fused `load v; [cast] load i; index; jumpF/jumpT`.
+    IndexJumpL { v: u16, i: u16, cast: Option<IntKind>, target: u32, jump_if: bool },
+    /// `obj[idx] = obj[idx] OP rhs` in one dispatch (rhs already pushed).
+    IndexRmw { op: BinOp },
     Return,
 }
 
@@ -1004,15 +1019,19 @@ impl<'a> FnCompiler<'a> {
             Expr::Index(obj, idx) => {
                 self.compile_expr(obj)?;
                 self.compile_expr(idx)?;
-                if let Some(binop) = op {
-                    self.emit(Op::Dup2);
-                    self.emit(Op::Index);
-                    self.compile_expr(rhs)?;
-                    self.emit(Op::Bin(*binop));
-                } else {
-                    self.compile_expr(rhs)?;
+                match op {
+                    // Rust evaluates the place (obj/idx), then the RHS, then
+                    // reads/updates the element; a single fused op keeps that
+                    // order and removes four dispatches.
+                    Some(binop) => {
+                        self.compile_expr(rhs)?;
+                        self.emit(Op::IndexRmw { op: *binop });
+                    }
+                    None => {
+                        self.compile_expr(rhs)?;
+                        self.emit(Op::IndexSet);
+                    }
                 }
-                self.emit(Op::IndexSet);
             }
             Expr::Unary(UnOp::Deref, inner) => {
                 return self.compile_assign(op, inner, rhs);
@@ -1382,13 +1401,77 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
             }
             Op::CmpJump { target, .. }
             | Op::CmpImmJump { target, .. }
-            | Op::JumpLocal { target, .. } => targets[*target as usize] = true,
+            | Op::JumpLocal { target, .. }
+            | Op::IndexJumpL { target, .. } => targets[*target as usize] = true,
             _ => {}
         }
     }
     let mut i = 0;
     while i < code.len() {
         map[i] = out.len();
+        if i + 4 < code.len()
+            && !targets[i + 1]
+            && !targets[i + 2]
+            && !targets[i + 3]
+            && !targets[i + 4]
+        {
+            if let Some(k) = int_cast_kind(&code[i + 2]) {
+                let fused = match (&code[i], &code[i + 1], &code[i + 3], &code[i + 4]) {
+                    (Op::Load(v), Op::Load(idx), Op::Load(val), Op::IndexSet) => {
+                        Some(Op::IndexSetLL {
+                            v: *v,
+                            i: *idx,
+                            val: *val,
+                            cast: Some(k),
+                        })
+                    }
+                    (Op::Load(v), Op::Load(idx), Op::Imm(x), Op::IndexSet) => {
+                        Some(Op::IndexSetLI {
+                            v: *v,
+                            i: *idx,
+                            imm: *x,
+                            cast: Some(k),
+                        })
+                    }
+                    (Op::Load(v), Op::Load(idx), Op::Const(c), Op::IndexSet) => {
+                        Some(Op::IndexSetLC {
+                            v: *v,
+                            i: *idx,
+                            k: *c,
+                            cast: Some(k),
+                        })
+                    }
+                    (Op::Load(v), Op::Load(idx), Op::Index, Op::JumpF(t)) => {
+                        Some(Op::IndexJumpL {
+                            v: *v,
+                            i: *idx,
+                            cast: Some(k),
+                            target: *t,
+                            jump_if: false,
+                        })
+                    }
+                    (Op::Load(v), Op::Load(idx), Op::Index, Op::JumpT(t)) => {
+                        Some(Op::IndexJumpL {
+                            v: *v,
+                            i: *idx,
+                            cast: Some(k),
+                            target: *t,
+                            jump_if: true,
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(op) = fused {
+                    let at = out.len();
+                    out.push(op);
+                    for off in 1..5 {
+                        map[i + off] = at;
+                    }
+                    i += 5;
+                    continue;
+                }
+            }
+        }
         if i + 3 < code.len()
             && !targets[i + 1]
             && !targets[i + 2]
@@ -1443,6 +1526,38 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
                         jump_if: true,
                     })
                 }
+                (Op::Load(v), Op::Load(idx), Op::Load(val), Op::IndexSet) => Some(Op::IndexSetLL {
+                    v: *v,
+                    i: *idx,
+                    val: *val,
+                    cast: None,
+                }),
+                (Op::Load(v), Op::Load(idx), Op::Imm(x), Op::IndexSet) => Some(Op::IndexSetLI {
+                    v: *v,
+                    i: *idx,
+                    imm: *x,
+                    cast: None,
+                }),
+                (Op::Load(v), Op::Load(idx), Op::Const(c), Op::IndexSet) => Some(Op::IndexSetLC {
+                    v: *v,
+                    i: *idx,
+                    k: *c,
+                    cast: None,
+                }),
+                (Op::Load(v), Op::Load(idx), Op::Index, Op::JumpF(t)) => Some(Op::IndexJumpL {
+                    v: *v,
+                    i: *idx,
+                    cast: None,
+                    target: *t,
+                    jump_if: false,
+                }),
+                (Op::Load(v), Op::Load(idx), Op::Index, Op::JumpT(t)) => Some(Op::IndexJumpL {
+                    v: *v,
+                    i: *idx,
+                    cast: None,
+                    target: *t,
+                    jump_if: true,
+                }),
                 _ => None,
             };
             if let Some(op) = fused {
@@ -1468,6 +1583,15 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
                     op: *op,
                 }),
                 (Op::Imm(x), Op::Imm(y), Op::Bin(op)) => fold_imm(*op, *x, *y).map(Op::FoldImm),
+                (Op::Load(v), Op::Load(idx), Op::Index) => Some(Op::IndexL {
+                    v: *v,
+                    i: *idx,
+                    cast: None,
+                }),
+                (Op::Load(v), Op::Imm(x), Op::Index) => Some(Op::IndexImm {
+                    v: *v,
+                    imm: *x,
+                }),
                 _ => None,
             };
             if let Some(op) = folded {
@@ -1511,6 +1635,10 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
                     op: *op,
                     dst: *d,
                 }),
+                (Op::Load(src), Op::Store(dst)) => Some(Op::CopyLocal {
+                    dst: *dst,
+                    src: *src,
+                }),
                 (Op::Imm(k), Op::Bin(op)) => Some(Op::TopBinImm {
                     imm: *k,
                     op: *op,
@@ -1537,7 +1665,8 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
             }
             Op::CmpJump { target, .. }
             | Op::CmpImmJump { target, .. }
-            | Op::JumpLocal { target, .. } => *target = map[*target as usize] as u32,
+            | Op::JumpLocal { target, .. }
+            | Op::IndexJumpL { target, .. } => *target = map[*target as usize] as u32,
             _ => {}
         }
     }
@@ -1559,6 +1688,13 @@ fn fold_imm(op: BinOp, a: i64, b: i64) -> Option<i64> {
         BinOp::Shr => a.wrapping_shr((b as u64 & 63) as u32),
         _ => return None,
     })
+}
+
+fn int_cast_kind(op: &Op) -> Option<IntKind> {
+    match op {
+        Op::Cast(crate::ops::CastTo::Int(k)) => Some(*k),
+        _ => None,
+    }
 }
 
 fn is_compare(op: BinOp) -> bool {

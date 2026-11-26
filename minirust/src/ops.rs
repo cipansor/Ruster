@@ -250,7 +250,7 @@ pub fn binop(op: BinOp, a: &Value, b: &Value) -> Result<Value, String> {
 }
 
 pub fn index_get(container: &Value, idx: &Value) -> Result<Value, String> {
-    let i = idx.as_int()?;
+    let i = idx.as_index()?;
     if i < 0 {
         return Err(format!("index out of bounds: the len is smaller than the index {i}"));
     }

@@ -252,6 +252,7 @@ fn supported_op(op: &Op) -> bool {
         | Op::JumpF(_)
         | Op::JumpT(_)
         | Op::JumpLocal { .. }
+        | Op::CopyLocal { .. }
         | Op::Call(_)
         | Op::Return => true,
         Op::CmpJump { op, .. } | Op::CmpImmJump { op, .. } => cmp_ok(*op),
@@ -467,7 +468,7 @@ fn effect(
         Op::PushBinLocals { .. } | Op::PushBinLocalImm { .. } => (0, 1, next),
         Op::TopBinImm { .. } => (1, 1, next),
         Op::BinStore { .. } => (2, 0, next),
-        Op::BinLocals { .. } | Op::BinLocalImm { .. } => (0, 0, next),
+        Op::BinLocals { .. } | Op::BinLocalImm { .. } | Op::CopyLocal { .. } => (0, 0, next),
         Op::Call(c) => (funcs[*c as usize].nparams as usize, 1, next),
         Op::Jump(t) => (0, 0, vec![*t as usize]),
         Op::JumpF(t) | Op::JumpT(t) => (1, 0, vec![pc + 1, *t as usize]),
@@ -528,6 +529,7 @@ fn codegen(funcs: &[std::rc::Rc<Func>], idx: u32) -> Option<Generated> {
                 e.mov_rr(LOCAL_REGS[*s as usize], RAX);
             }
             Op::Pop => {}
+            Op::CopyLocal { dst, src } => e.mov_rr(LOCAL_REGS[*dst as usize], LOCAL_REGS[*src as usize]),
             Op::Bin(op) => {
                 e.stack_load(RAX, h - 2);
                 e.stack_load(RCX, h - 1);

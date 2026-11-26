@@ -44,6 +44,20 @@ impl Value {
         }
     }
 
+    /// Index coercion, mirroring `x as usize` for the scalar types.
+    pub fn as_index(&self) -> Result<i64, String> {
+        match self {
+            Value::Int(v) => Ok(*v),
+            Value::Bool(b) => Ok(*b as i64),
+            Value::Float(f) => Ok(*f as i64),
+            Value::Char(c) => Ok(*c as i64),
+            other => Err(format!(
+                "expected an integer index, found {}",
+                other.type_name()
+            )),
+        }
+    }
+
     pub fn as_bool(&self) -> Result<bool, String> {
         match self {
             Value::Bool(b) => Ok(*b),

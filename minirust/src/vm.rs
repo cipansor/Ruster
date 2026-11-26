@@ -18,6 +18,37 @@ struct Frame {
     base: usize,
 }
 
+fn index_of(
+    v: &Value,
+    cast: Option<crate::ast::IntKind>,
+) -> Result<i64, String> {
+    match cast {
+        Some(k) => ops::cast(v, ops::CastTo::Int(k))?.as_int(),
+        None => v.as_index(),
+    }
+}
+
+fn store_index(container: &Value, idx: i64, val: Value) -> Result<(), Trap> {
+    match container {
+        Value::Vec(rc) => {
+            let mut v = rc.borrow_mut();
+            if idx < 0 || idx as usize >= v.len() {
+                return Err(Trap::Panic(format!(
+                    "index out of bounds: the len is {} but the index is {}",
+                    v.len(),
+                    idx
+                )));
+            }
+            v[idx as usize] = val;
+            Ok(())
+        }
+        other => Err(Trap::Panic(format!(
+            "cannot assign into {}",
+            other.type_name()
+        ))),
+    }
+}
+
 pub struct Vm {
     prog: crate::compiler::Bytecode,
     globals: Vec<Value>,
@@ -131,16 +162,6 @@ impl Vm {
                 }
                 Op::Pop => {
                     pop(&mut stack)?;
-                }
-                Op::Dup2 => {
-                    let n = stack.len();
-                    if n < 2 {
-                        return Err(Trap::Panic("operand stack underflow".into()));
-                    }
-                    let a = stack[n - 2].clone();
-                    let b = stack[n - 1].clone();
-                    stack.push(a);
-                    stack.push(b);
                 }
                 Op::Bin(b) => {
                     let y = pop(&mut stack)?;
@@ -327,6 +348,61 @@ impl Vm {
                         v.push(item.deep_clone());
                     }
                     stack.push(Value::new_vec(v));
+                }
+                Op::CopyLocal { dst, src } => {
+                    locals[base + *dst as usize] = locals[base + *src as usize].clone();
+                }
+                Op::IndexL { v, i, cast } => {
+                    let idx = index_of(&locals[base + *i as usize], *cast).map_err(Trap::Panic)?;
+                    let val = ops::index_get(&locals[base + *v as usize], &Value::Int(idx))
+                        .map_err(Trap::Panic)?;
+                    stack.push(val);
+                }
+                Op::IndexImm { v, imm } => {
+                    let val = ops::index_get(&locals[base + *v as usize], &Value::Int(*imm))
+                        .map_err(Trap::Panic)?;
+                    stack.push(val);
+                }
+                Op::IndexSetLL { v, i, val, cast } => {
+                    let idx = index_of(&locals[base + *i as usize], *cast).map_err(Trap::Panic)?;
+                    let value = locals[base + *val as usize].clone();
+                    store_index(&locals[base + *v as usize], idx, value)?;
+                }
+                Op::IndexSetLI { v, i, imm, cast } => {
+                    let idx = index_of(&locals[base + *i as usize], *cast).map_err(Trap::Panic)?;
+                    store_index(&locals[base + *v as usize], idx, Value::Int(*imm))?;
+                }
+                Op::IndexSetLC { v, i, k, cast } => {
+                    let idx = index_of(&locals[base + *i as usize], *cast).map_err(Trap::Panic)?;
+                    let value = prog.consts[*k as usize].clone();
+                    store_index(&locals[base + *v as usize], idx, value)?;
+                }
+                Op::IndexJumpL {
+                    v,
+                    i,
+                    cast,
+                    target,
+                    jump_if,
+                } => {
+                    let idx = index_of(&locals[base + *i as usize], *cast).map_err(Trap::Panic)?;
+                    let elem = ops::index_get(&locals[base + *v as usize], &Value::Int(idx))
+                        .map_err(Trap::Panic)?;
+                    let truth = elem.as_bool().map_err(Trap::Panic)?;
+                    if truth == *jump_if {
+                        pc = *target as usize;
+                    }
+                }
+                Op::IndexRmw { op } => {
+                    let val = pop(&mut stack)?;
+                    let idx = pop(&mut stack)?;
+                    let obj = pop(&mut stack)?;
+                    let i = idx.as_index().map_err(Trap::Panic)?;
+                    let elem = ops::index_get(&obj, &Value::Int(i)).map_err(Trap::Panic)?;
+                    let res = match ops::binop_fast(*op, &elem, &val) {
+                        Some(v) => v,
+                        None => ops::binop(*op, &elem, &val).map_err(Trap::Panic)?,
+                    };
+                    store_index(&obj, i, res)?;
                 }
                 Op::Index => {
                     let idx = pop(&mut stack)?;

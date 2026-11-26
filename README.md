@@ -14,14 +14,14 @@ Hasilnya (8 program benchmark, 5 run, median):
 
 | Metrik | Hasil |
 |---|---|
-| Geometric-mean slowdown, interpreter saja | **43.0x** vs native |
-| Geometric-mean slowdown, dengan JIT | **11.3x** vs native |
+| Geometric-mean slowdown, interpreter saja | **41.5x** vs native |
+| Geometric-mean slowdown, dengan JIT | **11.2x** vs native |
 | Fungsi integer murni (fib, loop 10M, collatz) | **3.1x–3.9x** vs native |
-| Kode berat `Vec`/indeks (sieve, matmul, quicksort) | 52x–135x vs native |
+| Kode berat `Vec`/indeks (sieve, matmul, quicksort) | 55x–104x vs native |
 | Fase "compile" (lex+parse+bytecode) | **~1 ms**, 15.9 MB RAM (vs 73–125 ms, 90–111 MB untuk `rustc -O`) |
 | Ukuran | 4.9 MB satu binary untuk semua program (native: 4.3 MB per program) |
 
-Jadi: JIT memangkas jarak dari ~43x menjadi ~11.3x, dan untuk kode integer murni
+Jadi: JIT memangkas jarak dari ~42x menjadi ~11.2x, dan untuk kode integer murni
 kita berada di **3–4x native** — bukan native, tapi jauh lebih dekat daripada
 interpreter mana pun yang saya tulis sebelumnya. Sisa jarak besar ada di kode
 yang mengindeks `Vec`/`String`, yang belum dicakup JIT.
@@ -136,6 +136,10 @@ vm.rs        -> interpreter frame-stack; memanggil JIT bila memungkinkan
   - `Bin op; Store d` -> `BinStore`
   - `Imm a; Imm b; Bin op` -> `FoldImm` (konstanta)
   - bandingkan + lompat -> `CmpJump` / `CmpImmJump`
+  - `Load v; Load i; Index` -> `IndexL` (cast `as usize`-nya ikut di dalam op)
+  - `Load v; Load i; Load x; IndexSet` -> `IndexSetLL` (+ varian `LI`/`LC`)
+  - `v[i] op= x` -> `IndexRmw` (satu dispatch, bukan tujuh)
+  - `Load src; Store dst` -> `CopyLocal`
   - `Unit; Pop` -> dihapus (kecuali `Pop` adalah titik merge lompatan)
 - Semua fusi memeriksa apakah ada lompatan yang menargetkan instruksi di
   tengah pola; kalau ada, fusi dibatalkan. Ini penting: satu bug awal membuat
@@ -208,35 +212,35 @@ program: 5 kompilasi, 5 eksekusi; median wall/CPU, peak RSS maksimum.
 
 ### 4.1 Fase kompilasi (per program)
 
-| program | rustc -O wall | rustc CPU | rustc RSS | binary native | front-end minirust | front-end CPU | front-end RSS |
+| program | rustc -O wall | rustc CPU | rustc RSS | native binary | minirust front-end wall | front-end CPU | front-end RSS |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| hello | 72.8 ms | 87.9 ms | 89.5 MB | 4.3 MB | **1.0 ms** | 0.9 ms | 15.6 MB |
-| fib | 75.9 ms | 90.8 ms | 90.6 MB | 4.3 MB | **1.0 ms** | 0.9 ms | 15.8 MB |
-| loop_sum | 77.7 ms | 91.8 ms | 90.8 MB | 4.3 MB | **1.0 ms** | 1.0 ms | 15.8 MB |
-| collatz | 77.4 ms | 92.0 ms | 92.1 MB | 4.3 MB | **1.1 ms** | 1.0 ms | 15.8 MB |
-| sieve | 95.1 ms | 109.7 ms | 106.9 MB | 4.3 MB | **1.1 ms** | 1.0 ms | 15.9 MB |
-| matmul | 124.6 ms | 139.9 ms | 107.5 MB | 4.3 MB | **1.2 ms** | 1.1 ms | 15.9 MB |
-| quicksort | 103.1 ms | 117.7 ms | 108.7 MB | 4.3 MB | **1.1 ms** | 1.1 ms | 15.9 MB |
-| strings | 116.5 ms | 131.5 ms | 111.2 MB | 4.3 MB | **1.1 ms** | 1.0 ms | 15.9 MB |
+| hello | 74.2 ms | 89.7 ms | 89.8 MB | 4.3 MB | 1.0 ms | 0.9 ms | 15.6 MB |
+| fib | 77.2 ms | 91.9 ms | 90.4 MB | 4.3 MB | 1.0 ms | 1.0 ms | 15.8 MB |
+| loop_sum | 78.6 ms | 93.6 ms | 91.0 MB | 4.3 MB | 1.0 ms | 1.0 ms | 15.8 MB |
+| collatz | 77.3 ms | 91.4 ms | 92.1 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.8 MB |
+| sieve | 96.1 ms | 111.6 ms | 107.0 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.9 MB |
+| matmul | 124.2 ms | 139.4 ms | 107.4 MB | 4.3 MB | 1.2 ms | 1.1 ms | 15.9 MB |
+| quicksort | 102.2 ms | 116.9 ms | 107.4 MB | 4.3 MB | 1.2 ms | 1.1 ms | 15.9 MB |
+| strings | 117.9 ms | 133.3 ms | 111.2 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.9 MB |
 
 "Front-end" = lex + parse + bytecode + evaluasi `const`, diukur lewat
 `rust --compile-only`. Tidak ada kode native yang dihasilkan pada tahap ini.
 
-Build interpreter sekali saja: `rustc -O` = **2.5 s wall, 6.3 s CPU (paralel),
-247 MB RSS**.
+Build interpreter sekali saja: `rustc -O` = **2.4 s wall, 6.5 s CPU (paralel),
+252 MB RSS**.
 
 ### 4.2 Fase runtime (dengan JIT)
 
 | program | native wall | native CPU | native CPU% | native RSS | minirust (JIT) wall | CPU | CPU% | RSS | slowdown |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| hello | 0.9 ms | 0.8 ms | 91% | 15.6 MB | 1.1 ms | 1.0 ms | 91% | 15.6 MB | **1.2x** |
-| fib | 3.0 ms | 2.9 ms | 97% | 15.6 MB | 9.3 ms | 9.2 ms | 99% | 15.6 MB | **3.1x** |
-| loop_sum | 3.6 ms | 3.5 ms | 97% | 15.8 MB | 14.1 ms | 14.0 ms | 99% | 15.8 MB | **3.9x** |
-| collatz | 22.9 ms | 22.8 ms | 99% | 15.8 MB | 70.6 ms | 70.4 ms | 100% | 15.8 MB | **3.1x** |
-| sieve | 2.3 ms | 2.2 ms | 96% | 15.9 MB | 309.4 ms | 309.2 ms | 100% | 18.0 MB | 135.1x |
-| matmul | 2.6 ms | 2.5 ms | 95% | 15.9 MB | 226.7 ms | 226.5 ms | 100% | 15.9 MB | 86.0x |
-| quicksort | 4.2 ms | 4.1 ms | 97% | 15.9 MB | 217.6 ms | 217.4 ms | 100% | 15.9 MB | 51.6x |
-| strings | 1.3 ms | 1.2 ms | 94% | 15.9 MB | 12.5 ms | 12.4 ms | 99% | 15.9 MB | 9.7x |
+| hello | 0.9 ms | 0.8 ms | 91% | 15.6 MB | 1.0 ms | 0.9 ms | 93% | 15.6 MB | 1.2x |
+| fib | 3.2 ms | 3.1 ms | 97% | 15.6 MB | 9.6 ms | 9.4 ms | 98% | 15.8 MB | 3.0x |
+| loop_sum | 3.6 ms | 3.5 ms | 97% | 15.8 MB | 14.1 ms | 14.0 ms | 99% | 15.8 MB | 3.9x |
+| collatz | 22.5 ms | 22.3 ms | 99% | 15.8 MB | 70.8 ms | 70.6 ms | 100% | 15.8 MB | 3.1x |
+| sieve | 2.3 ms | 2.2 ms | 97% | 15.9 MB | 237.8 ms | 237.4 ms | 100% | 18.0 MB | 103.6x |
+| matmul | 1.8 ms | 1.8 ms | 96% | 15.9 MB | 173.9 ms | 173.7 ms | 100% | 15.9 MB | 94.9x |
+| quicksort | 3.9 ms | 3.9 ms | 98% | 15.9 MB | 216.6 ms | 216.4 ms | 100% | 15.9 MB | 55.0x |
+| strings | 1.2 ms | 1.1 ms | 93% | 15.9 MB | 12.6 ms | 12.5 ms | 99% | 15.9 MB | 10.5x |
 
 CPU usage interpreter ~99–100% (single-thread). `rustc` bisa >100% karena
 kompilasi paralel.
@@ -245,29 +249,29 @@ kompilasi paralel.
 
 | program | interpreter saja | dengan JIT | speedup JIT | native | JIT vs native |
 |---|---:|---:|---:|---:|---:|
-| hello | 1.3 ms | 1.1 ms | 1.16x | 0.9 ms | 1.2x |
-| fib | 193.6 ms | **9.3 ms** | **20.75x** | 3.0 ms | 3.1x |
-| loop_sum | 939.4 ms | **14.1 ms** | **66.76x** | 3.6 ms | 3.9x |
-| collatz | 1966.5 ms | **70.6 ms** | **27.85x** | 22.9 ms | 3.1x |
-| sieve | 307.5 ms | 309.4 ms | 0.99x | 2.3 ms | 135.1x |
-| matmul | 225.9 ms | 226.7 ms | 1.00x | 2.6 ms | 86.0x |
-| quicksort | 219.0 ms | 217.6 ms | 1.01x | 4.2 ms | 51.6x |
-| strings | 12.5 ms | 12.5 ms | 1.00x | 1.3 ms | 9.7x |
+| hello | 1.0 ms | 1.0 ms | 0.97x | 0.9 ms | 1.2x |
+| fib | 191.2 ms | 9.6 ms | 19.98x | 3.2 ms | 3.0x |
+| loop_sum | 932.0 ms | 14.1 ms | 65.88x | 3.6 ms | 3.9x |
+| collatz | 1972.7 ms | 70.8 ms | 27.87x | 22.5 ms | 3.1x |
+| sieve | 236.3 ms | 237.8 ms | 0.99x | 2.3 ms | 103.6x |
+| matmul | 172.6 ms | 173.9 ms | 0.99x | 1.8 ms | 94.9x |
+| quicksort | 219.0 ms | 216.6 ms | 1.01x | 3.9 ms | 55.0x |
+| strings | 12.8 ms | 12.6 ms | 1.01x | 1.2 ms | 10.5x |
 
 ### 4.4 End-to-end (sumber -> output)
 
-| program | rustc compile + run | minirust front-end + run | rasio |
+| program | rustc compile + run | minirust front-end + run | ratio |
 |---|---:|---:|---:|
-| hello | 73.7 ms | **2.1 ms** | minirust 34.8x lebih cepat |
-| fib | 79.0 ms | **10.3 ms** | minirust 7.6x lebih cepat |
-| loop_sum | 81.3 ms | **15.1 ms** | minirust 5.4x lebih cepat |
-| collatz | 100.3 ms | **71.7 ms** | minirust 1.4x lebih cepat |
-| strings | 117.8 ms | **13.5 ms** | minirust 8.7x lebih cepat |
-| matmul | 127.3 ms | 227.9 ms | native 1.79x |
-| quicksort | 107.3 ms | 218.7 ms | native 2.04x |
-| sieve | 97.3 ms | 310.5 ms | native 3.19x |
+| hello | 75.1 ms | 2.0 ms | 1/37.3 faster |
+| fib | 80.3 ms | 10.6 ms | 1/7.6 faster |
+| loop_sum | 82.2 ms | 15.2 ms | 1/5.4 faster |
+| collatz | 99.8 ms | 71.9 ms | 1/1.4 faster |
+| sieve | 98.4 ms | 238.8 ms | 2.43x |
+| matmul | 126.0 ms | 175.0 ms | 1.39x |
+| quicksort | 106.1 ms | 217.8 ms | 2.05x |
+| strings | 119.1 ms | 13.7 ms | 1/8.7 faster |
 
-**Geometric-mean slowdown runtime: 11.3x dengan JIT, 43.0x tanpa JIT.**
+**Geometric-mean slowdown runtime: 11.2x dengan JIT, 41.5x tanpa JIT.**
 
 Karena `rustc -O` makan 73–125 ms per program, minirust menang end-to-end untuk
 program yang berjalan singkat — sekarang termasuk fib dan loop 10 juta iterasi.
@@ -291,17 +295,17 @@ binary menjalankan semua program tanpa kompilasi per program.
 
 ## 5. Analisis: di mana jaraknya sekarang?
 
-### 5.1 Interpreter (43.0x)
+### 5.1 Interpreter (41.5x)
 
 Penyebab klasik: dispatch per instruksi, `Value` 16 byte ber-tag, tidak ada
 register allocation, tidak ada inlining/vektorisasi, dan `Rc`/`RefCell` untuk
-`Vec`/`String`. Loop `loop_sum` 10 juta iterasi butuh ~939 ms (≈94 ns/iterasi)
+`Vec`/`String`. Loop `loop_sum` 10 juta iterasi butuh ~932 ms (≈94 ns/iterasi)
 karena setiap iterasi mengeksekusi ~7 bytecode dengan biaya ~10 ns masing-masing.
 
 ### 5.2 JIT integer (3.1–3.9x)
 
 JIT menghapus dispatch dan tag check: lokal di register, aritmetika langsung
-`add/sub/imul`, cabang `cmp+jcc`. Hasilnya 20–67x lebih cepat dari interpreter.
+`add/sub/imul`, cabang `cmp+jcc`. Hasilnya 20–66x lebih cepat dari interpreter.
 
 Sisa 3–4x berasal dari:
 
@@ -437,5 +441,5 @@ value 380, lexer 410, ops 270, ast 210, main 210).
 6. **Perluas subset bahasa**: `struct`, `match`, closure, iterator adapter,
    `Option`/`Result`.
 
-Sampai langkah 1 dikerjakan, angka 11.3x (dan 3–4x untuk kode integer) adalah
+Sampai langkah 1 dikerjakan, angka 11.2x (dan 3–4x untuk kode integer) adalah
 batas jujur dari implementasi ini.
