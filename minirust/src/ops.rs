@@ -262,8 +262,7 @@ pub fn index_get_i(container: &Value, i: i64) -> Result<Value, String> {
     match container {
         Value::Vec(v) => {
             let v = v.borrow();
-            v.get(i)
-                .cloned()
+            v.get_value(i)
                 .ok_or_else(|| format!("index out of bounds: the len is {} but the index is {}", v.len(), i))
         }
         Value::Tuple(t) => t

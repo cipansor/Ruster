@@ -3,7 +3,8 @@
 use crate::compiler::{Func, MethodId, Op, TPiece};
 use crate::jit;
 use crate::ops;
-use crate::value::{compare, format_value, parse_spec, Value};
+use crate::value::{compare, format_value, parse_spec, Value, VecData};
+use std::cell::RefCell;
 use std::io::{BufWriter, Stderr, Stdout, Write};
 use std::rc::Rc;
 
@@ -39,8 +40,7 @@ fn store_index(container: &Value, idx: i64, val: Value) -> Result<(), Trap> {
                     idx
                 )));
             }
-            v[idx as usize] = val;
-            Ok(())
+            v.set_value(idx as usize, val).map_err(Trap::Panic)
         }
         other => Err(Trap::Panic(format!(
             "cannot assign into {}",
@@ -343,11 +343,18 @@ impl Vm {
                             "refusing to allocate a Vec with {n} elements"
                         )));
                     }
-                    let mut v = Vec::with_capacity(n as usize);
-                    for _ in 0..n {
-                        v.push(item.deep_clone());
-                    }
-                    stack.push(Value::new_vec(v));
+                    let data = match &item {
+                        Value::Int(x) => VecData::from_int(n as usize, *x),
+                        Value::Bool(b) => VecData::from_bool(n as usize, *b),
+                        _ => {
+                            let mut v = Vec::with_capacity(n as usize);
+                            for _ in 0..n {
+                                v.push(item.deep_clone());
+                            }
+                            VecData::new(v)
+                        }
+                    };
+                    stack.push(Value::Vec(Rc::new(RefCell::new(data))));
                 }
                 Op::CopyLocal { dst, src } => {
                     locals[base + *dst as usize] = locals[base + *src as usize].clone();
@@ -423,26 +430,8 @@ impl Vm {
                     let val = pop(&mut stack)?;
                     let idx = pop(&mut stack)?;
                     let c = pop(&mut stack)?;
-                    let i = idx.as_int().map_err(Trap::Panic)?;
-                    match c {
-                        Value::Vec(rc) => {
-                            let mut v = rc.borrow_mut();
-                            if i < 0 || i as usize >= v.len() {
-                                return Err(Trap::Panic(format!(
-                                    "index out of bounds: the len is {} but the index is {}",
-                                    v.len(),
-                                    i
-                                )));
-                            }
-                            v[i as usize] = val;
-                        }
-                        other => {
-                            return Err(Trap::Panic(format!(
-                                "cannot assign into {}",
-                                other.type_name()
-                            )))
-                        }
-                    }
+                    let i = idx.as_index().map_err(Trap::Panic)?;
+                    store_index(&c, i, val)?;
                 }
                 Op::TupleGet(i) => {
                     let t = pop(&mut stack)?;
@@ -526,12 +515,12 @@ impl Vm {
                     let c = pop(&mut stack)?;
                     match c {
                         Value::Vec(rc) => {
-                            let i = idx.as_int().map_err(Trap::Panic)?;
+                            let i = idx.as_index().map_err(Trap::Panic)?;
                             let v = rc.borrow();
                             if i < 0 || i as usize >= v.len() {
                                 pc = *t as usize;
                             } else {
-                                let item = v[i as usize].clone();
+                                let item = v.get_value(i as usize).unwrap();
                                 drop(v);
                                 stack.push(item);
                             }
@@ -649,13 +638,13 @@ impl Vm {
             },
             MethodId::Sort => match &recv {
                 Value::Vec(v) => {
-                    let mut v = v.borrow_mut();
-                    if let Some(first) = v.first() {
-                        for item in v.iter() {
-                            compare(first, item)?;
+                    if let Some(first) = v.borrow().first_value() {
+                        for item in v.borrow().to_value_vec() {
+                            compare(&first, &item)?;
                         }
                     }
-                    v.sort_by(|a, b| compare(a, b).unwrap_or(std::cmp::Ordering::Equal));
+                    v.borrow_mut()
+                        .sort_by(|a, b| compare(a, b).unwrap_or(std::cmp::Ordering::Equal));
                     Ok(Value::Unit)
                 }
                 other => Err(format!("`sort` is not defined for {}", other.type_name())),
@@ -663,7 +652,7 @@ impl Vm {
             MethodId::Contains => match &recv {
                 Value::Vec(v) => {
                     let needle = arg(0)?;
-                    Ok(Value::Bool(v.borrow().iter().any(|x| x.equals(needle))))
+                    Ok(Value::Bool(v.borrow().contains_value(needle)))
                 }
                 Value::Str(s) => {
                     let needle = arg(0)?.borrow_str()?;
@@ -673,9 +662,12 @@ impl Vm {
             },
             MethodId::First | MethodId::Last => match &recv {
                 Value::Vec(v) => {
-                    let v = v.borrow();
-                    let item = if id == MethodId::First { v.first() } else { v.last() };
-                    Ok(item.cloned().unwrap_or(Value::Unit))
+                    let item = if id == MethodId::First {
+                        v.borrow().first_value()
+                    } else {
+                        v.borrow().last_value()
+                    };
+                    Ok(item.unwrap_or(Value::Unit))
                 }
                 other => Err(format!("`{:?}` is not defined for {}", id, other.type_name())),
             },
@@ -683,8 +675,9 @@ impl Vm {
                 Value::Vec(v) => {
                     let sep = arg(0)?.borrow_str()?;
                     let v = v.borrow();
-                    let mut parts = Vec::with_capacity(v.len());
-                    for item in v.iter() {
+                    let items = v.to_value_vec();
+                    let mut parts = Vec::with_capacity(items.len());
+                    for item in items {
                         parts.push(item.borrow_str()?.clone());
                     }
                     Ok(Value::new_str(parts.join(&sep)))
@@ -737,9 +730,10 @@ impl Vm {
                         return Err(format!("bad repeat count {n}"));
                     }
                     let v = v.borrow();
-                    let mut out = Vec::with_capacity(v.len() * n as usize);
+                    let items = v.to_value_vec();
+                    let mut out = Vec::with_capacity(items.len() * n as usize);
                     for _ in 0..n {
-                        for item in v.iter() {
+                        for item in &items {
                             out.push(item.deep_clone());
                         }
                     }

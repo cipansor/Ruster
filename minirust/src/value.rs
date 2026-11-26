@@ -11,8 +11,197 @@ pub enum Value {
     Bool(bool),
     Char(char),
     Str(Rc<RefCell<String>>),
-    Vec(Rc<RefCell<Vec<Value>>>),
+    Vec(Rc<RefCell<VecData>>),
     Tuple(Rc<Vec<Value>>),
+}
+
+/// Backing store for `Vec`: either generic `Value`s or a packed scalar buffer.
+/// Packed buffers keep `Vec<i64>`/`Vec<bool>` loops free of 16-byte `Value`s.
+pub struct VecData {
+    values: Vec<Value>,
+    ints: Option<Vec<i64>>,
+    bools: Option<Vec<bool>>,
+}
+
+impl VecData {
+    pub fn new(values: Vec<Value>) -> VecData {
+        VecData { values, ints: None, bools: None }
+    }
+
+    pub fn from_int(n: usize, v: i64) -> VecData {
+        VecData { values: Vec::new(), ints: Some(vec![v; n]), bools: None }
+    }
+
+    pub fn from_bool(n: usize, b: bool) -> VecData {
+        VecData { values: Vec::new(), ints: None, bools: Some(vec![b; n]) }
+    }
+
+    fn materialize(&mut self) {
+        if let Some(ints) = self.ints.take() {
+            self.values = ints.into_iter().map(Value::Int).collect();
+        }
+        if let Some(bools) = self.bools.take() {
+            self.values = bools.into_iter().map(Value::Bool).collect();
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match (&self.ints, &self.bools) {
+            (Some(v), _) => v.len(),
+            (_, Some(v)) => v.len(),
+            _ => self.values.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get_value(&self, i: usize) -> Option<Value> {
+        if let Some(v) = &self.ints {
+            return v.get(i).map(|x| Value::Int(*x));
+        }
+        if let Some(v) = &self.bools {
+            return v.get(i).map(|x| Value::Bool(*x));
+        }
+        self.values.get(i).cloned()
+    }
+
+    pub fn set_value(&mut self, i: usize, val: Value) -> Result<(), String> {
+        if let Some(v) = &mut self.ints {
+            return match val {
+                Value::Int(x) => {
+                    v[i] = x;
+                    Ok(())
+                }
+                other => Err(format!("cannot store {} in a Vec<i64>", other.type_name())),
+            };
+        }
+        if let Some(v) = &mut self.bools {
+            return match val {
+                Value::Bool(b) => {
+                    v[i] = b;
+                    Ok(())
+                }
+                other => Err(format!("cannot store {} in a Vec<bool>", other.type_name())),
+            };
+        }
+        self.values[i] = val;
+        Ok(())
+    }
+
+    pub fn to_value_vec(&self) -> Vec<Value> {
+        if let Some(v) = &self.ints {
+            return v.iter().map(|x| Value::Int(*x)).collect();
+        }
+        if let Some(v) = &self.bools {
+            return v.iter().map(|x| Value::Bool(*x)).collect();
+        }
+        self.values.clone()
+    }
+
+    pub fn push(&mut self, val: Value) {
+        if let Some(v) = &mut self.ints {
+            if let Value::Int(x) = val {
+                v.push(x);
+                return;
+            }
+        } else if let Some(v) = &mut self.bools {
+            if let Value::Bool(b) = val {
+                v.push(b);
+                return;
+            }
+        } else {
+            self.values.push(val);
+            return;
+        }
+        self.materialize();
+        self.values.push(val);
+    }
+
+    pub fn pop(&mut self) -> Option<Value> {
+        if let Some(v) = &mut self.ints {
+            return v.pop().map(Value::Int);
+        }
+        if let Some(v) = &mut self.bools {
+            return v.pop().map(Value::Bool);
+        }
+        self.values.pop()
+    }
+
+    pub fn clear(&mut self) {
+        if let Some(v) = &mut self.ints {
+            v.clear();
+        } else if let Some(v) = &mut self.bools {
+            v.clear();
+        } else {
+            self.values.clear();
+        }
+    }
+
+    pub fn insert(&mut self, i: usize, val: Value) {
+        self.materialize();
+        self.values.insert(i, val);
+    }
+
+    pub fn remove(&mut self, i: usize) -> Value {
+        self.materialize();
+        self.values.remove(i)
+    }
+
+    pub fn reverse(&mut self) {
+        if let Some(v) = &mut self.ints {
+            v.reverse();
+        } else if let Some(v) = &mut self.bools {
+            v.reverse();
+        } else {
+            self.values.reverse();
+        }
+    }
+
+    pub fn sort_by<F: FnMut(&Value, &Value) -> std::cmp::Ordering>(&mut self, f: F) {
+        self.materialize();
+        self.values.sort_by(f);
+    }
+
+    pub fn contains_value(&self, n: &Value) -> bool {
+        if let Some(v) = &self.ints {
+            return matches!(n, Value::Int(x) if v.contains(x));
+        }
+        if let Some(v) = &self.bools {
+            return matches!(n, Value::Bool(x) if v.contains(x));
+        }
+        self.values.iter().any(|x| x.equals(n))
+    }
+
+    pub fn first_value(&self) -> Option<Value> {
+        self.get_value(0)
+    }
+
+    pub fn last_value(&self) -> Option<Value> {
+        let n = self.len();
+        if n == 0 { None } else { self.get_value(n - 1) }
+    }
+
+    pub fn deep_clone(&self) -> VecData {
+        VecData {
+            values: self.values.iter().map(|x| x.deep_clone()).collect(),
+            ints: self.ints.clone(),
+            bools: self.bools.clone(),
+        }
+    }
+
+    pub fn equals(&self, other: &VecData) -> bool {
+        if let (Some(a), Some(b)) = (&self.ints, &other.ints) {
+            return a == b;
+        }
+        if let (Some(a), Some(b)) = (&self.bools, &other.bools) {
+            return a == b;
+        }
+        let a = self.to_value_vec();
+        let b = other.to_value_vec();
+        a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
+    }
 }
 
 impl Value {
@@ -28,7 +217,7 @@ impl Value {
     }
 
     pub fn new_vec(v: Vec<Value>) -> Value {
-        Value::Vec(Rc::new(RefCell::new(v)))
+        Value::Vec(Rc::new(RefCell::new(VecData::new(v))))
     }
 
     pub fn type_name(&self) -> &'static str {
@@ -84,7 +273,7 @@ impl Value {
     /// structurally instead of sharing their backing store.
     pub fn deep_clone(&self) -> Value {
         match self {
-            Value::Vec(v) => Value::new_vec(v.borrow().iter().map(|x| x.deep_clone()).collect()),
+            Value::Vec(v) => Value::Vec(Rc::new(RefCell::new(v.borrow().deep_clone()))),
             Value::Tuple(t) => Value::Tuple(Rc::new(t.iter().map(|x| x.deep_clone()).collect())),
             Value::Str(s) => Value::Str(Rc::new(RefCell::new(s.borrow().clone()))),
             other => other.clone(),
@@ -111,11 +300,7 @@ impl Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => *a.borrow() == *b.borrow(),
-            (Value::Vec(a), Value::Vec(b)) => {
-                let a = a.borrow();
-                let b = b.borrow();
-                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
-            }
+            (Value::Vec(a), Value::Vec(b)) => a.borrow().equals(&b.borrow()),
             (Value::Tuple(a), Value::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.equals(y))
             }
@@ -360,7 +545,7 @@ pub fn format_value(v: &Value, spec: &Spec) -> String {
             text
         }
         (Value::Vec(items), _) => {
-            let items = items.borrow();
+            let items = items.borrow().to_value_vec();
             let mut out = String::from("[");
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
