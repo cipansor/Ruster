@@ -302,20 +302,28 @@ def main():
         failed,
     )
 
-    # 10. An unmatched --only must fail before overwriting the reports.
-    results_json = os.path.join(ROOT, "bench", "results.json")
-    results_md = os.path.join(ROOT, "bench", "results.md")
-    backup_json = results_json + ".bak"
-    backup_md = results_md + ".bak"
-    shutil.copy2(results_json, backup_json)
-    shutil.copy2(results_md, backup_md)
-    env = os.environ.copy()
-    env.pop("MINIRUST_NO_JIT", None)
-    try:
+    # 10. An unmatched --only must fail before writing the reports. Run a copy
+    #     of the CLI inside a temporary tree so the checkout's reports (and any
+    #     user backups) are never touched.
+    with tempfile.TemporaryDirectory() as tmp:
+        bench_dir = os.path.join(tmp, "bench")
+        os.makedirs(bench_dir)
+        script = os.path.join(bench_dir, "bench.py")
+        shutil.copy2(os.path.join(ROOT, "bench", "bench.py"), script)
+        results_json = os.path.join(bench_dir, "results.json")
+        results_md = os.path.join(bench_dir, "results.md")
+        sentinel_json = '{"programs": ["sentinel-json"]}\n'
+        sentinel_md = "# sentinel-md\n"
+        with open(results_json, "w") as f:
+            f.write(sentinel_json)
+        with open(results_md, "w") as f:
+            f.write(sentinel_md)
+        env = os.environ.copy()
+        env.pop("MINIRUST_NO_JIT", None)
         out = subprocess.run(
             [
                 sys.executable,
-                os.path.join(ROOT, "bench", "bench.py"),
+                script,
                 "--only",
                 "__none__",
                 "--no-build",
@@ -332,9 +340,14 @@ def main():
         if "no benchmark matched" not in out.stderr:
             print("FAIL unmatched --only did not explain the mismatch")
             failed += 1
-    finally:
-        shutil.move(backup_json, results_json)
-        shutil.move(backup_md, results_md)
+        with open(results_json) as f:
+            if f.read() != sentinel_json:
+                print("FAIL unmatched --only overwrote results.json")
+                failed += 1
+        with open(results_md) as f:
+            if f.read() != sentinel_md:
+                print("FAIL unmatched --only overwrote results.md")
+                failed += 1
 
     if failed == 0:
         print("ok   benchmark arithmetic, engine choice, and both parity checks")
