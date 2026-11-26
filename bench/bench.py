@@ -103,7 +103,7 @@ def build_interpreter():
         sys.exit("rustc not found in PATH")
     os.makedirs(os.path.dirname(BIN), exist_ok=True)
     tmp = BIN + ".tmp"
-    row = run_measured([rustc, "--edition", "2021", "-O", SRC, "-o", tmp])
+    row = run_measured([rustc, "--edition", "2024", "-O", SRC, "-o", tmp])
     if row["code"] != 0:
         sys.exit("interpreter build failed")
     os.replace(tmp, BIN)
@@ -167,7 +167,7 @@ def main():
             exe = os.path.join(td, "native")
             compile_rows = []
             for _ in range(args.compile_runs):
-                row = run_measured([shutil.which("rustc"), "--edition", "2021", "-O", src, "-o", exe])
+                row = run_measured([shutil.which("rustc"), "--edition", "2024", "-O", src, "-o", exe])
                 if row["code"] != 0:
                     sys.exit(f"rustc failed for {name}")
                 compile_rows.append(row)

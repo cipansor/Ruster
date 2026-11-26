@@ -47,10 +47,12 @@ written before. The remaining gap is concentrated in code that indexes
 
 ## 1. Build and usage
 
-No Cargo required. All you need is `rustc`:
+No Cargo required. All you need is `rustc`. Ruster uses the **Rust 2024
+edition**, so it needs rustc **1.85 or newer** (the latest stable is
+recommended):
 
 ```bash
-rustc --edition 2021 -O ruster/src/main.rs -o bin/rust
+rustc --edition 2024 -O ruster/src/main.rs -o bin/rust
 ```
 
 Then:

@@ -23,7 +23,7 @@ const PAGE: usize = 4096;
 const PROT_RWX: i32 = 7;
 const MAP_PRIVATE_ANON: i32 = 0x22;
 
-extern "C" {
+unsafe extern "C" {
     fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut u8;
     fn munmap(addr: *mut u8, len: usize) -> i32;
     fn mprotect(addr: *mut u8, len: usize, prot: i32) -> i32;
@@ -83,23 +83,25 @@ impl Jit {
 }
 
 unsafe fn call_int_fn(ptr: *const u8, args: &[i64]) -> i64 {
-    match args.len() {
-        0 => std::mem::transmute::<*const u8, extern "C" fn() -> i64>(ptr)(),
-        1 => std::mem::transmute::<*const u8, extern "C" fn(i64) -> i64>(ptr)(args[0]),
-        2 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64) -> i64>(ptr)(args[0], args[1]),
-        3 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64, i64) -> i64>(ptr)(
-            args[0], args[1], args[2],
-        ),
-        4 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64, i64, i64) -> i64>(ptr)(
-            args[0], args[1], args[2], args[3],
-        ),
-        5 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64, i64, i64, i64) -> i64>(ptr)(
-            args[0], args[1], args[2], args[3], args[4],
-        ),
-        6 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64, i64, i64, i64, i64) -> i64>(
-            ptr,
-        )(args[0], args[1], args[2], args[3], args[4], args[5]),
-        _ => unreachable!("JIT functions take at most 6 arguments"),
+    unsafe {
+        match args.len() {
+            0 => std::mem::transmute::<*const u8, extern "C" fn() -> i64>(ptr)(),
+            1 => std::mem::transmute::<*const u8, extern "C" fn(i64) -> i64>(ptr)(args[0]),
+            2 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64) -> i64>(ptr)(args[0], args[1]),
+            3 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64, i64) -> i64>(ptr)(
+                args[0], args[1], args[2],
+            ),
+            4 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64, i64, i64) -> i64>(ptr)(
+                args[0], args[1], args[2], args[3],
+            ),
+            5 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64, i64, i64, i64) -> i64>(ptr)(
+                args[0], args[1], args[2], args[3], args[4],
+            ),
+            6 => std::mem::transmute::<*const u8, extern "C" fn(i64, i64, i64, i64, i64, i64) -> i64>(
+                ptr,
+            )(args[0], args[1], args[2], args[3], args[4], args[5]),
+            _ => unreachable!("JIT functions take at most 6 arguments"),
+        }
     }
 }
 
@@ -109,7 +111,7 @@ unsafe fn call_int_fn(ptr: *const u8, args: &[i64]) -> i64 {
 /// `ptr` must point to code produced by this module for a function with
 /// `args.len()` parameters, and every argument must be an integer.
 pub unsafe fn call(ptr: *const u8, args: &[i64]) -> i64 {
-    call_int_fn(ptr, args)
+    unsafe { call_int_fn(ptr, args) }
 }
 
 pub fn compile(prog: &Bytecode) -> Jit {

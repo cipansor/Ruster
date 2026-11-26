@@ -194,7 +194,7 @@ USAGE:
     rust --help
 
 The interpreter is a single binary built with:
-    rustc --edition 2021 -O src/main.rs -o rust
+    rustc --edition 2024 -O ruster/src/main.rs -o bin/rust
 No cargo, no crates, no network."
     );
 }

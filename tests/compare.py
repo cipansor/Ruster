@@ -30,7 +30,7 @@ def main():
         name = os.path.basename(path)
         with tempfile.TemporaryDirectory() as td:
             exe = os.path.join(td, "prog")
-            compiled = run([RUSTC, "--edition", "2021", "-O", path, "-o", exe])
+            compiled = run([RUSTC, "--edition", "2024", "-O", path, "-o", exe])
             if compiled.returncode != 0:
                 print(f"RUSTC-FAIL {name}\n{compiled.stderr}")
                 failed += 1
