@@ -45,6 +45,7 @@ impl VecData {
         }
     }
 
+    #[inline(always)]
     pub fn len(&self) -> usize {
         match (&self.ints, &self.bools) {
             (Some(v), _) => v.len(),
@@ -57,6 +58,7 @@ impl VecData {
         self.len() == 0
     }
 
+    #[inline(always)]
     pub fn get_value(&self, i: usize) -> Option<Value> {
         if let Some(v) = &self.ints {
             return v.get(i).map(|x| Value::Int(*x));
@@ -67,6 +69,7 @@ impl VecData {
         self.values.get(i).cloned()
     }
 
+    #[inline(always)]
     pub fn set_value(&mut self, i: usize, val: Value) -> Result<(), String> {
         if let Some(v) = &mut self.ints {
             return match val {

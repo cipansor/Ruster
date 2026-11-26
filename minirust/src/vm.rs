@@ -19,6 +19,7 @@ struct Frame {
     base: usize,
 }
 
+#[inline(always)]
 fn index_of(
     v: &Value,
     cast: Option<crate::ast::IntKind>,
@@ -29,6 +30,7 @@ fn index_of(
     }
 }
 
+#[inline(always)]
 fn store_index(container: &Value, idx: i64, val: Value) -> Result<(), Trap> {
     match container {
         Value::Vec(rc) => {

@@ -254,6 +254,7 @@ pub fn index_get(container: &Value, idx: &Value) -> Result<Value, String> {
 }
 
 /// Index with an already-coerced integer, avoiding a temporary `Value`.
+#[inline(always)]
 pub fn index_get_i(container: &Value, i: i64) -> Result<Value, String> {
     if i < 0 {
         return Err(format!("index out of bounds: the len is smaller than the index {i}"));
