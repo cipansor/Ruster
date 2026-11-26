@@ -503,8 +503,6 @@ batas jujur dari implementasi ini.
 - `break`/`continue` berlabel (`break 'outer`) — tidak dimodelkan.
 - `*x = ...` (assignment lewat reference) — reference ke skalar dilewatkan
   by value, jadi penulisan tidak akan sampai ke pemanggil.
-- `break`/`continue` di dalam argumen pemanggilan fungsi — argumen yang sudah
-  di-push akan tertinggal; pakai variabel perantara.
 - Fungsi rekursif (langsung maupun tidak langsung) tetap dijalankan oleh
   interpreter: JIT tidak punya penjaga kedalaman stack native, jadi rekursi
   dalam hanya di-JIT untuk pemanggilan yang tidak bersiklus.

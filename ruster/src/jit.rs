@@ -130,10 +130,11 @@ pub fn compile(prog: &Bytecode) -> Jit {
 fn jit_x86(prog: &Bytecode) -> Jit {
     let funcs = &prog.funcs;
     let n = funcs.len();
+    let recursive = recursive_funcs(funcs);
     let mut ok = vec![false; n];
     for (i, f) in funcs.iter().enumerate() {
         ok[i] = eligible_preconditions(f)
-            && !reaches_itself(funcs, i)
+            && !recursive[i]
             && analyse(funcs, i).is_some();
     }
     // A function is only eligible if every callee is eligible.
@@ -239,27 +240,91 @@ fn jit_x86(prog: &Bytecode) -> Jit {
     jit
 }
 
-/// True when `start` is reachable from itself through calls. Generated code has
-/// no stack-depth guard, so any recursive cycle (direct or mutual) stays in the
+/// True for every function that lies on a call cycle (directly or mutually).
+/// Generated code has no stack-depth guard, so any recursive cycle stays in the
 /// interpreter where frames live on the heap.
-fn reaches_itself(funcs: &[std::rc::Rc<Func>], start: usize) -> bool {
-    let mut seen = vec![false; funcs.len()];
-    let mut stack = vec![start];
-    while let Some(f) = stack.pop() {
-        for op in &funcs[f].code {
+///
+/// One Tarjan SCC pass marks a whole cycle at once. Doing a reachability walk
+/// per function instead would be quadratic on a long acyclic call chain.
+fn recursive_funcs(funcs: &[std::rc::Rc<Func>]) -> Vec<bool> {
+    const UNVISITED: usize = usize::MAX;
+    let n = funcs.len();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut self_loop = vec![false; n];
+    for (i, f) in funcs.iter().enumerate() {
+        for op in &f.code {
             if let Op::Call(c) = op {
                 let c = *c as usize;
-                if c == start {
-                    return true;
+                if c == i {
+                    self_loop[i] = true;
                 }
-                if c < seen.len() && !seen[c] {
-                    seen[c] = true;
-                    stack.push(c);
+                if c < n {
+                    adj[i].push(c);
                 }
             }
         }
     }
-    false
+
+    let mut index = vec![UNVISITED; n];
+    let mut low = vec![0usize; n];
+    let mut on_stack = vec![false; n];
+    let mut comp = vec![UNVISITED; n];
+    let mut comp_size: Vec<usize> = Vec::new();
+    let mut tarjan_stack: Vec<usize> = Vec::new();
+    let mut next_index = 0usize;
+
+    // Each work item is (node, next child index). An explicit stack keeps deep
+    // call graphs from overflowing the native stack.
+    let mut work: Vec<(usize, usize)> = Vec::new();
+    for root in 0..n {
+        if index[root] != UNVISITED {
+            continue;
+        }
+        index[root] = next_index;
+        low[root] = next_index;
+        next_index += 1;
+        tarjan_stack.push(root);
+        on_stack[root] = true;
+        work.push((root, 0));
+        while let Some((v, child)) = work.pop() {
+            if child < adj[v].len() {
+                work.push((v, child + 1));
+                let w = adj[v][child];
+                if index[w] == UNVISITED {
+                    index[w] = next_index;
+                    low[w] = next_index;
+                    next_index += 1;
+                    tarjan_stack.push(w);
+                    on_stack[w] = true;
+                    work.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+            } else {
+                if low[v] == index[v] {
+                    let id = comp_size.len();
+                    let mut size = 0;
+                    loop {
+                        let w = tarjan_stack.pop().unwrap();
+                        on_stack[w] = false;
+                        comp[w] = id;
+                        size += 1;
+                        if w == v {
+                            break;
+                        }
+                    }
+                    comp_size.push(size);
+                }
+                if let Some(&(parent, _)) = work.last() {
+                    low[parent] = low[parent].min(low[v]);
+                }
+            }
+        }
+    }
+
+    (0..n)
+        .map(|i| self_loop[i] || comp_size[comp[i]] > 1)
+        .collect()
 }
 
 fn eligible_preconditions(f: &Func) -> bool {

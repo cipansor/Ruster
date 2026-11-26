@@ -206,9 +206,11 @@ def main():
             "jit_speedup": interp_run["wall"] / jit_run["wall"]
             if jit_run["wall"] > 0
             else None,
-            "code_match": native_run["codes"] == jit_run["codes"] == interp_run["codes"]
-            == 0
-            and _stdout_equal(src),
+            "code_match": (
+                native_run["codes"] == jit_run["codes"] == interp_run["codes"]
+                and all(code == 0 for code in native_run["codes"])
+                and _stdout_equal(src)
+            ),
         }
         results["programs"].append(entry)
         print(

@@ -509,6 +509,10 @@ struct LoopCtx {
     breaks: Vec<usize>,
     continues: Vec<usize>,
     value_slot: Option<u16>,
+    /// Operand-stack depth at the loop head. `break`/`continue` discard any
+    /// operands pushed above it (for example a partially evaluated argument
+    /// list) before jumping, so each transfer leaves a balanced stack.
+    base_depth: usize,
 }
 
 struct FnCompiler<'a> {
@@ -519,6 +523,9 @@ struct FnCompiler<'a> {
     max_locals: u16,
     scopes: Vec<usize>,
     loops: Vec<LoopCtx>,
+    /// Compile-time operand-stack depth, used to discard operands on loop
+    /// transfers. Updated by `emit` from each op's stack effect.
+    depth: usize,
 }
 
 impl<'a> FnCompiler<'a> {
@@ -531,6 +538,7 @@ impl<'a> FnCompiler<'a> {
             max_locals: 0,
             scopes: Vec::new(),
             loops: Vec::new(),
+            depth: 0,
         };
         for (pat, _ty) in &f.params {
             match pat {
@@ -564,8 +572,36 @@ impl<'a> FnCompiler<'a> {
 
     fn emit(&mut self, op: Op) -> usize {
         let i = self.code.len();
+        let effect = self.stack_effect(&op);
         self.code.push(op);
+        self.depth = (self.depth as i64 + effect).max(0) as usize;
         i
+    }
+
+    /// Net operand-stack effect of `op` (pushes minus pops). `Return` resets
+    /// the depth because it discards the whole frame.
+    fn stack_effect(&self, op: &Op) -> i64 {
+        match op {
+            Op::Const(_) | Op::Imm(_) | Op::Unit | Op::Load(_) | Op::NewString | Op::NewVec
+            | Op::LoadGlobal(_) | Op::FoldImm(_) | Op::PushBinLocals { .. }
+            | Op::PushBinLocalImm { .. } | Op::IndexL { .. } | Op::IndexImm { .. } => 1,
+            Op::Store(_) | Op::Pop | Op::Bin(_) | Op::JumpF(_) | Op::JumpT(_) | Op::VecRepeat
+            | Op::Index | Op::StoreGlobal(_) | Op::IterGet(_) => -1,
+            Op::IndexSet | Op::IndexRmw { .. } => -3,
+            Op::AssertEq { .. } | Op::BinStore { .. } => -2,
+            Op::MakeArray(n) | Op::MakeTuple(n) => 1 - *n as i64,
+            Op::Call(idx) => 1 - self.c.funcs[*idx as usize].nparams as i64,
+            Op::Method(_, argc) => -(*argc as i64),
+            Op::Print { argc, .. } | Op::Format { argc, .. } => 1 - *argc as i64,
+            Op::Panic { argc, .. } => -(*argc as i64),
+            Op::Exit => -1,
+            Op::Return => -(self.depth as i64),
+            Op::Un(_) | Op::Cast(_) | Op::Jump(_) | Op::TupleGet(_) | Op::Dump
+            | Op::BinLocals { .. } | Op::BinLocalImm { .. } | Op::CmpJump { .. }
+            | Op::CmpImmJump { .. } | Op::JumpLocal { .. } | Op::TopBinImm { .. }
+            | Op::CopyLocal { .. } | Op::IndexSetLL { .. } | Op::IndexSetLI { .. }
+            | Op::IndexSetLC { .. } | Op::IndexJumpL { .. } | Op::IndexSetFromIndex { .. } => 0,
+        }
     }
 
     fn emit_jump(&mut self, op: Op) -> usize {
@@ -709,13 +745,20 @@ impl<'a> FnCompiler<'a> {
             Expr::If { cond, then_b, else_b } => {
                 self.compile_expr(cond)?;
                 let jf = self.emit_jump(Op::JumpF(0));
+                let branch_depth = self.depth;
                 self.compile_block_discard(then_b)?;
+                let then_depth = self.depth;
+                let then_div = block_diverges(then_b);
                 let jend = self.emit_jump(Op::Jump(0));
                 let else_start = self.here();
                 self.patch(jf, else_start);
+                self.depth = branch_depth;
                 if let Some(els) = else_b {
                     self.compile_expr_discard(els)?;
                 }
+                let else_depth = self.depth;
+                let else_div = else_b.as_ref().map(|e| diverges(e)).unwrap_or(false);
+                self.depth = if then_div && !else_div { else_depth } else { then_depth };
                 let end = self.here();
                 self.patch(jend, end);
                 Ok(())
@@ -853,10 +896,12 @@ impl<'a> FnCompiler<'a> {
             Expr::Binary(BinOp::And, a, b) => {
                 self.compile_expr(a)?;
                 let jf = self.emit_jump(Op::JumpF(0));
+                let branch_depth = self.depth;
                 self.compile_expr(b)?;
                 let jend = self.emit_jump(Op::Jump(0));
                 let short = self.here();
                 self.patch(jf, short);
+                self.depth = branch_depth;
                 self.emit_const(Value::Bool(false));
                 let end = self.here();
                 self.patch(jend, end);
@@ -864,10 +909,12 @@ impl<'a> FnCompiler<'a> {
             Expr::Binary(BinOp::Or, a, b) => {
                 self.compile_expr(a)?;
                 let jt = self.emit_jump(Op::JumpT(0));
+                let branch_depth = self.depth;
                 self.compile_expr(b)?;
                 let jend = self.emit_jump(Op::Jump(0));
                 let short = self.here();
                 self.patch(jt, short);
+                self.depth = branch_depth;
                 self.emit_const(Value::Bool(true));
                 let end = self.here();
                 self.patch(jend, end);
@@ -929,16 +976,26 @@ impl<'a> FnCompiler<'a> {
             Expr::If { cond, then_b, else_b } => {
                 self.compile_expr(cond)?;
                 let jf = self.emit_jump(Op::JumpF(0));
+                let branch_depth = self.depth;
                 self.compile_block(then_b)?;
+                let then_depth = self.depth;
+                let then_div = block_diverges(then_b);
                 let jend = self.emit_jump(Op::Jump(0));
                 let else_start = self.here();
                 self.patch(jf, else_start);
+                // The else branch runs on the stack as it was before `then`.
+                self.depth = branch_depth;
                 match else_b {
                     Some(e) => self.compile_expr(e)?,
                     None => {
                         self.emit(Op::Unit);
                     }
                 }
+                let else_depth = self.depth;
+                let else_div = else_b.as_ref().map(|e| diverges(e)).unwrap_or(false);
+                // Only the branch that can fall through determines the stack
+                // shape after the `if`.
+                self.depth = if then_div && !else_div { else_depth } else { then_depth };
                 let end = self.here();
                 self.patch(jend, end);
             }
@@ -948,6 +1005,7 @@ impl<'a> FnCompiler<'a> {
                     breaks: Vec::new(),
                     continues: Vec::new(),
                     value_slot: None,
+                    base_depth: self.depth,
                 });
                 self.compile_expr(cond)?;
                 let jf = self.emit_jump(Op::JumpF(0));
@@ -976,6 +1034,7 @@ impl<'a> FnCompiler<'a> {
                     breaks: Vec::new(),
                     continues: Vec::new(),
                     value_slot: Some(tmp),
+                    base_depth: self.depth,
                 });
                 self.compile_block(body)?;
                 self.emit(Op::Pop);
@@ -996,11 +1055,12 @@ impl<'a> FnCompiler<'a> {
             }
             Expr::Macro { name, args, sep } => self.compile_macro(name, args, *sep)?,
             Expr::Break(value) => {
-                let slot = self
+                let ctx = self
                     .loops
                     .last()
-                    .ok_or_else(|| "`break` outside of a loop".to_string())?
-                    .value_slot;
+                    .ok_or_else(|| "`break` outside of a loop".to_string())?;
+                let slot = ctx.value_slot;
+                let base = ctx.base_depth;
                 match value {
                     Some(v) => self.compile_expr(v)?,
                     None => {
@@ -1015,12 +1075,23 @@ impl<'a> FnCompiler<'a> {
                         self.emit(Op::Pop);
                     }
                 }
+                // Drop operands pushed above the loop head (e.g. a partially
+                // evaluated argument list); the jump bypasses their consumers.
+                let extra = self.depth.saturating_sub(base);
+                for _ in 0..extra {
+                    self.emit(Op::Pop);
+                }
                 let j = self.emit_jump(Op::Jump(0));
                 self.loops.last_mut().unwrap().breaks.push(j);
             }
             Expr::Continue => {
-                if self.loops.is_empty() {
-                    return Err("`continue` outside of a loop".into());
+                let base = match self.loops.last() {
+                    Some(ctx) => ctx.base_depth,
+                    None => return Err("`continue` outside of a loop".into()),
+                };
+                let extra = self.depth.saturating_sub(base);
+                for _ in 0..extra {
+                    self.emit(Op::Pop);
                 }
                 let j = self.emit_jump(Op::Jump(0));
                 self.loops.last_mut().unwrap().continues.push(j);
@@ -1101,21 +1172,8 @@ impl<'a> FnCompiler<'a> {
                     .get(name)
                     .ok_or_else(|| format!("cannot find function `{name}`"))?;
                 self.check_arity(name, idx, args.len())?;
-                let arg_start = self.code.len();
                 for a in args {
                     self.compile_expr(a)?;
-                }
-                let arg_end = self.code.len();
-                // A `break`/`continue` inside an argument jumps out of the argument
-                // range, abandoning the arguments already pushed for this call.
-                if self.code[arg_start..arg_end]
-                    .iter()
-                    .any(|op| matches!(op, Op::Jump(t) if (*t as usize) < arg_start || (*t as usize) > arg_end))
-                {
-                    return Err(
-                        "`break`/`continue` inside call arguments is outside the mini-rust subset"
-                            .into(),
-                    );
                 }
                 self.emit(Op::Call(idx));
             }
@@ -1260,6 +1318,7 @@ impl<'a> FnCompiler<'a> {
                     breaks: Vec::new(),
                     continues: Vec::new(),
                     value_slot: None,
+                    base_depth: self.depth,
                 });
                 self.emit(Op::Load(i_slot));
                 self.emit(Op::Load(end_slot));
@@ -1305,6 +1364,7 @@ impl<'a> FnCompiler<'a> {
                     breaks: Vec::new(),
                     continues: Vec::new(),
                     value_slot: None,
+                    base_depth: self.depth,
                 });
                 self.emit(Op::Load(it_slot));
                 self.emit(Op::Load(idx_slot));
@@ -1399,6 +1459,7 @@ impl<'a> FnCompiler<'a> {
                 }
                 self.compile_expr(&args[0])?;
                 let jt = self.emit_jump(Op::JumpT(0));
+                let branch_depth = self.depth;
                 let (tpl_str, rest): (String, Vec<&Expr>) = if args.len() > 1 {
                     match &args[1] {
                         Expr::Str(s) => (s.clone(), args[2..].iter().collect()),
@@ -1414,6 +1475,8 @@ impl<'a> FnCompiler<'a> {
                 self.emit(Op::Panic { tpl, argc: rest.len() as u16 });
                 let end = self.here();
                 self.patch(jt, end);
+                // The passing path skips the panic block entirely.
+                self.depth = branch_depth;
                 self.emit(Op::Unit);
             }
             "assert_eq" | "assert_ne" => {
@@ -1808,6 +1871,13 @@ fn normalize_iter(e: &Expr) -> &Expr {
     }
 }
 
+fn block_diverges(b: &Block) -> bool {
+    b.stmts
+        .last()
+        .map(|s| matches!(s, Stmt::Expr { expr, semi: false } if diverges(expr)))
+        .unwrap_or(false)
+}
+
 fn diverges(e: &Expr) -> bool {
     match e {
         Expr::Return(_) | Expr::Break(_) | Expr::Continue => true,
@@ -1815,21 +1885,10 @@ fn diverges(e: &Expr) -> bool {
             name.as_str(),
             "panic" | "unreachable" | "todo" | "unimplemented"
         ),
-        Expr::Block(b) => b
-            .stmts
-            .last()
-            .map(|s| matches!(s, Stmt::Expr { expr, semi: false } if diverges(expr)))
-            .unwrap_or(false),
+        Expr::Block(b) => block_diverges(b),
         Expr::If { then_b, else_b, .. } => {
-            let then_div = then_b
-                .stmts
-                .last()
-                .map(|s| matches!(s, Stmt::Expr { expr, semi: false } if diverges(expr)))
-                .unwrap_or(false);
-            let else_div = else_b
-                .as_ref()
-                .map(|e| diverges(e))
-                .unwrap_or(false);
+            let then_div = block_diverges(then_b);
+            let else_div = else_b.as_ref().map(|e| diverges(e)).unwrap_or(false);
             then_div && else_div
         }
         _ => false,
