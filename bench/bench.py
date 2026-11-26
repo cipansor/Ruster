@@ -50,6 +50,13 @@ def check_environment():
 check_environment()
 
 
+def _stdout_equal(src):
+    """JIT and interpreter must agree on stdout, not just on the exit code."""
+    a = subprocess.run([BIN, src], capture_output=True)
+    b = subprocess.run([BIN, "--no-jit", src], capture_output=True)
+    return a.stdout == b.stdout and a.returncode == b.returncode
+
+
 def rss_mb(kb):
     return kb / 1024.0
 
@@ -199,7 +206,9 @@ def main():
             "jit_speedup": interp_run["wall"] / jit_run["wall"]
             if jit_run["wall"] > 0
             else None,
-            "code_match": native_run["codes"] == jit_run["codes"] == interp_run["codes"],
+            "code_match": native_run["codes"] == jit_run["codes"] == interp_run["codes"]
+            == 0
+            and _stdout_equal(src),
         }
         results["programs"].append(entry)
         print(

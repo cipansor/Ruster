@@ -2,6 +2,7 @@
 """Run every tests/programs/*.rs with rustc, Ruster (JIT on) and
 Ruster --no-jit, and require all three to agree on stdout and exit code."""
 import glob
+import platform
 import os
 import subprocess
 import sys
@@ -14,6 +15,11 @@ RUSTC = os.environ.get("RUSTC", "rustc")
 
 def run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True)
+
+
+REQUIRE_JIT = platform.machine() in ("x86_64", "AMD64") and os.environ.get(
+    "REQUIRE_JIT", "1"
+) != "0"
 
 
 def main():
@@ -60,7 +66,7 @@ def main():
             failed += 1
         else:
             print(f"ok   {name}")
-    if jit_functions == 0:
+    if REQUIRE_JIT and jit_functions == 0:
         print("JIT-NOT-EXERCISED: no test program executed JIT-compiled code")
         failed += 1
 

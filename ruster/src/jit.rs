@@ -14,6 +14,7 @@
 //! Non-eligible functions keep running in the interpreter; the VM falls back
 //! per call, and only when all arguments are `Value::Int`.
 
+#![cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 use crate::ast::BinOp;
 use crate::compiler::{Bytecode, Func, Op};
 use std::collections::HashMap;
@@ -112,20 +113,27 @@ pub unsafe fn call(ptr: *const u8, args: &[i64]) -> i64 {
 }
 
 pub fn compile(prog: &Bytecode) -> Jit {
+    #[cfg(target_arch = "x86_64")]
+    {
+        jit_x86(prog)
+    }
     #[cfg(not(target_arch = "x86_64"))]
     {
         let _ = prog;
-        return Jit::empty();
+        Jit::empty()
     }
-    #[cfg(target_arch = "x86_64")]
+}
+
+/// The emitter only produces x86-64 machine code, so other targets must never
+/// enter it: mapping executable memory would succeed and then run the wrong ISA.
+#[cfg(target_arch = "x86_64")]
+fn jit_x86(prog: &Bytecode) -> Jit {
     let funcs = &prog.funcs;
     let n = funcs.len();
     let mut ok = vec![false; n];
     for (i, f) in funcs.iter().enumerate() {
         ok[i] = eligible_preconditions(f)
-            && !f.code
-                .iter()
-                .any(|op| matches!(op, Op::Call(c) if *c as usize == i))
+            && !reaches_itself(funcs, i)
             && analyse(funcs, i).is_some();
     }
     // A function is only eligible if every callee is eligible.
@@ -229,6 +237,29 @@ pub fn compile(prog: &Bytecode) -> Jit {
         }
     }
     jit
+}
+
+/// True when `start` is reachable from itself through calls. Generated code has
+/// no stack-depth guard, so any recursive cycle (direct or mutual) stays in the
+/// interpreter where frames live on the heap.
+fn reaches_itself(funcs: &[std::rc::Rc<Func>], start: usize) -> bool {
+    let mut seen = vec![false; funcs.len()];
+    let mut stack = vec![start];
+    while let Some(f) = stack.pop() {
+        for op in &funcs[f].code {
+            if let Op::Call(c) = op {
+                let c = *c as usize;
+                if c == start {
+                    return true;
+                }
+                if c < seen.len() && !seen[c] {
+                    seen[c] = true;
+                    stack.push(c);
+                }
+            }
+        }
+    }
+    false
 }
 
 fn eligible_preconditions(f: &Func) -> bool {
