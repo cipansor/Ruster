@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main, minirust]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build (${{ matrix.os }}) + differential tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: rustc --version && python3 --version
+
+      - name: Build Ruster (single binary, no cargo, no crates)
+        run: |
+          mkdir -p bin
+          rustc --edition 2021 -O ruster/src/main.rs -o bin/rust
+          ls -lh bin/rust
+
+      - name: Smoke test
+        run: |
+          ./bin/rust --version
+          printf 'fn main() { println!("{}", 6 * 7); }\n' > /tmp/smoke.rs
+          ./bin/rust /tmp/smoke.rs | grep -qx 42
+
+      - name: Differential tests vs rustc
+        run: python3 tests/compare.py
+
+      - name: Error-case tests (panic/exit codes)
+        run: python3 tests/errors.py
+
+      - name: Benchmark (informational, ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        run: python3 bench/bench.py --runs 3 --compile-runs 3
+
+      - name: Upload benchmark report
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: |
+            bench/results.md
+            bench/results.json
+          if-no-files-found: ignore
