@@ -64,6 +64,37 @@ fn main() {
     };
     println!("{}", skipped);
 
+    // An `else if` arm that calls `process::exit` cannot fall through, so the
+    // merge must take its depth from the final `else`.
+    let exit_arm = 10 + loop {
+        add(
+            if false { break 2; } else if false { std::process::exit(1) } else { 3 },
+            { break 5; },
+        );
+    };
+    println!("{}", exit_arm);
+
+    // Untaken `return`s in the other loop forms must restore the depth before
+    // an outer `break` discards a live argument.
+    let loop_exit = 10 + loop {
+        add(1, { loop { break 2; return; } });
+        add(4, { break 7; });
+    };
+    let range_exit = 10 + loop {
+        for i in 0..0 {
+            return;
+        }
+        add(4, { break 7; });
+    };
+    let coll_exit = 10 + loop {
+        let empty: Vec<i64> = Vec::new();
+        for x in empty {
+            return;
+        }
+        add(4, { break 7; });
+    };
+    println!("{} {} {}", loop_exit, range_exit, coll_exit);
+
     // A `break` in a method argument discards the receiver operand too.
     let mut v: Vec<i64> = Vec::new();
     let got = loop {

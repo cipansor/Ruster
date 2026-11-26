@@ -1220,7 +1220,7 @@ impl<'a> FnCompiler<'a> {
                         self.emit(Op::Pop);
                         self.emit(Op::NewVec);
                     }
-                    "std::process::exit" | "process::exit" => {
+                    name if is_process_exit_path(name) => {
                         if args.len() != 1 {
                             return Err("exit takes exactly one argument".into());
                         }
@@ -1906,6 +1906,7 @@ fn block_reaches_end(b: &Block) -> bool {
 fn reaches_end(e: &Expr) -> bool {
     match e {
         Expr::Return(_) | Expr::Break(_) | Expr::Continue => false,
+        Expr::Call(callee, _) if is_process_exit_call(callee) => false,
         Expr::Macro { name, .. } => !matches!(
             name.as_str(),
             "panic" | "unreachable" | "todo" | "unimplemented"
@@ -1916,6 +1917,16 @@ fn reaches_end(e: &Expr) -> bool {
         }
         _ => true,
     }
+}
+
+/// The `exit` builtins that `compile_call` lowers to `Op::Exit`, which never
+/// returns. Keep the two call sites on one list.
+fn is_process_exit_path(name: &str) -> bool {
+    matches!(name, "std::process::exit" | "process::exit")
+}
+
+fn is_process_exit_call(callee: &Expr) -> bool {
+    matches!(callee, Expr::Path(path) if is_process_exit_path(&path.join("::")))
 }
 
 fn diverges(e: &Expr) -> bool {
