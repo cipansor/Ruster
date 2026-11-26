@@ -354,12 +354,12 @@ impl Vm {
                 }
                 Op::IndexL { v, i, cast } => {
                     let idx = index_of(&locals[base + *i as usize], *cast).map_err(Trap::Panic)?;
-                    let val = ops::index_get(&locals[base + *v as usize], &Value::Int(idx))
+                    let val = ops::index_get_i(&locals[base + *v as usize], idx)
                         .map_err(Trap::Panic)?;
                     stack.push(val);
                 }
                 Op::IndexImm { v, imm } => {
-                    let val = ops::index_get(&locals[base + *v as usize], &Value::Int(*imm))
+                    let val = ops::index_get_i(&locals[base + *v as usize], *imm)
                         .map_err(Trap::Panic)?;
                     stack.push(val);
                 }
@@ -385,7 +385,7 @@ impl Vm {
                     jump_if,
                 } => {
                     let idx = index_of(&locals[base + *i as usize], *cast).map_err(Trap::Panic)?;
-                    let elem = ops::index_get(&locals[base + *v as usize], &Value::Int(idx))
+                    let elem = ops::index_get_i(&locals[base + *v as usize], idx)
                         .map_err(Trap::Panic)?;
                     let truth = elem.as_bool().map_err(Trap::Panic)?;
                     if truth == *jump_if {
