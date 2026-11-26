@@ -404,6 +404,15 @@ impl Vm {
                     };
                     store_index(&obj, i, res)?;
                 }
+                Op::IndexSetFromIndex { v, i, j, cast } => {
+                    let idx = index_of(&locals[base + *i as usize], *cast).map_err(Trap::Panic)?;
+                    let val = ops::index_get(
+                        &locals[base + *v as usize],
+                        &locals[base + *j as usize],
+                    )
+                    .map_err(Trap::Panic)?;
+                    store_index(&locals[base + *v as usize], idx, val)?;
+                }
                 Op::Index => {
                     let idx = pop(&mut stack)?;
                     let c = pop(&mut stack)?;

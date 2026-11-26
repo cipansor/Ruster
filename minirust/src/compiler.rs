@@ -3,7 +3,7 @@
 use crate::ast::*;
 use crate::ops::{self, CastTo};
 use crate::value::{parse_spec, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,6 +196,8 @@ pub enum Op {
     IndexJumpL { v: u16, i: u16, cast: Option<IntKind>, target: u32, jump_if: bool },
     /// `obj[idx] = obj[idx] OP rhs` in one dispatch (rhs already pushed).
     IndexRmw { op: BinOp },
+    /// `obj[i] = obj[j]` in one dispatch.
+    IndexSetFromIndex { v: u16, i: u16, j: u16, cast: Option<IntKind> },
     Return,
 }
 
@@ -266,34 +268,23 @@ pub fn compile(ast: ProgramAst) -> Result<Bytecode, String> {
         }));
     }
 
-    // Constants can refer to each other; loop until everything resolves.
-    let mut pending: Vec<&Item> = ast
+    // Constants can refer to each other. Resolving on demand (instead of
+    // re-scanning every unresolved const each pass) keeps this linear even for
+    // chains written in reverse dependency order.
+    let const_defs: HashMap<&str, &Expr> = ast
         .items
         .iter()
-        .filter(|i| matches!(i, Item::Const { .. }))
+        .filter_map(|i| match i {
+            Item::Const { name, value, .. } => Some((name.as_str(), value)),
+            _ => None,
+        })
         .collect();
-    let mut last_err = String::new();
-    while !pending.is_empty() {
-        let mut still = Vec::new();
-        let mut progress = false;
-        for item in pending {
-            if let Item::Const { name, value, .. } = item {
-                match c.eval_const(value) {
-                    Ok(v) => {
-                        c.const_map.insert(name.clone(), v);
-                        progress = true;
-                    }
-                    Err(e) => {
-                        last_err = format!("in const `{name}`: {e}");
-                        still.push(item);
-                    }
-                }
-            }
+    let mut active: HashSet<String> = HashSet::new();
+    for item in ast.items.iter() {
+        if let Item::Const { name, .. } = item {
+            c.resolve_const(name, &const_defs, &mut active)
+                .map_err(|e| format!("in const `{name}`: {e}"))?;
         }
-        if !progress {
-            return Err(last_err);
-        }
-        pending = still;
     }
 
     let mut pending: Vec<&Item> = ast
@@ -301,6 +292,7 @@ pub fn compile(ast: ProgramAst) -> Result<Bytecode, String> {
         .iter()
         .filter(|i| matches!(i, Item::Static { .. }))
         .collect();
+    let mut last_err = String::new();
     while !pending.is_empty() {
         let mut still = Vec::new();
         let mut progress = false;
@@ -355,6 +347,46 @@ impl Compiler {
             }
         }
         None
+    }
+
+    /// Evaluate `name`, first resolving any const it references (on demand).
+    fn resolve_const(
+        &mut self,
+        name: &str,
+        defs: &HashMap<&str, &Expr>,
+        active: &mut HashSet<String>,
+    ) -> Result<(), String> {
+        if self.const_map.contains_key(name) {
+            return Ok(());
+        }
+        if active.contains(name) {
+            return Err(format!("cyclic constant definition involving `{name}`"));
+        }
+        let expr = *defs
+            .get(name)
+            .ok_or_else(|| format!("unknown constant `{name}`"))?;
+        active.insert(name.to_string());
+        let result = loop {
+            match self.eval_const(expr) {
+                Ok(v) => {
+                    self.const_map.insert(name.to_string(), v);
+                    break Ok(());
+                }
+                Err(e) => {
+                    let dep = e
+                        .strip_prefix("unknown constant `")
+                        .and_then(|s| s.strip_suffix('`'));
+                    match dep {
+                        Some(d) if defs.contains_key(d) && !active.contains(d) => {
+                            self.resolve_const(d, defs, active)?;
+                        }
+                        _ => break Err(e),
+                    }
+                }
+            }
+        };
+        active.remove(name);
+        result
     }
 
     fn eval_const(&self, e: &Expr) -> Result<Value, String> {
@@ -483,6 +515,7 @@ struct FnCompiler<'a> {
     c: &'a mut Compiler,
     code: Vec<Op>,
     locals: Vec<LocalVar>,
+    by_name: HashMap<String, Vec<u16>>,
     max_locals: u16,
     scopes: Vec<usize>,
     loops: Vec<LoopCtx>,
@@ -494,6 +527,7 @@ impl<'a> FnCompiler<'a> {
             c,
             code: Vec::new(),
             locals: Vec::new(),
+            by_name: HashMap::new(),
             max_locals: 0,
             scopes: Vec::new(),
             loops: Vec::new(),
@@ -573,6 +607,7 @@ impl<'a> FnCompiler<'a> {
 
     fn alloc_local(&mut self, name: &str) -> u16 {
         let slot = self.locals.len() as u16;
+        self.by_name.entry(name.to_string()).or_default().push(slot);
         self.locals.push(LocalVar { name: name.to_string() });
         if slot + 1 > self.max_locals {
             self.max_locals = slot + 1;
@@ -586,15 +621,19 @@ impl<'a> FnCompiler<'a> {
 
     fn scope_exit(&mut self) {
         if let Some(n) = self.scopes.pop() {
+            for l in &self.locals[n..] {
+                if let Some(slots) = self.by_name.get_mut(&l.name) {
+                    slots.pop();
+                }
+            }
             self.locals.truncate(n);
         }
     }
 
     fn resolve_local(&self, name: &str) -> Option<u16> {
-        self.locals
-            .iter()
-            .rposition(|l| l.name == name)
-            .map(|i| i as u16)
+        self.by_name
+            .get(name)
+            .and_then(|slots| slots.last().copied())
     }
 
     fn load_var(&mut self, name: &str) -> Result<(), String> {
@@ -1409,6 +1448,66 @@ fn peephole(code: Vec<Op>) -> Vec<Op> {
     let mut i = 0;
     while i < code.len() {
         map[i] = out.len();
+        if i + 5 < code.len()
+            && !targets[i + 1]
+            && !targets[i + 2]
+            && !targets[i + 3]
+            && !targets[i + 4]
+            && !targets[i + 5]
+        {
+            if let Some(k) = int_cast_kind(&code[i + 2]) {
+                if let (
+                    Op::Load(v),
+                    Op::Load(idx),
+                    Op::Load(j),
+                    Op::Index,
+                    Op::IndexSet,
+                ) = (&code[i], &code[i + 1], &code[i + 3], &code[i + 4], &code[i + 5])
+                {
+                    let at = out.len();
+                    out.push(Op::IndexSetFromIndex {
+                        v: *v,
+                        i: *idx,
+                        j: *j,
+                        cast: Some(k),
+                    });
+                    for off in 1..6 {
+                        map[i + off] = at;
+                    }
+                    i += 6;
+                    continue;
+                }
+            }
+        }
+        if i + 4 < code.len()
+            && !targets[i + 1]
+            && !targets[i + 2]
+            && !targets[i + 3]
+            && !targets[i + 4]
+            && int_cast_kind(&code[i + 2]).is_none()
+        {
+            if let (
+                Op::Load(v),
+                Op::Load(idx),
+                Op::Load(j),
+                Op::Index,
+                Op::IndexSet,
+            ) = (&code[i], &code[i + 1], &code[i + 2], &code[i + 3], &code[i + 4])
+            {
+                let at = out.len();
+                out.push(Op::IndexSetFromIndex {
+                    v: *v,
+                    i: *idx,
+                    j: *j,
+                    cast: None,
+                });
+                for off in 1..5 {
+                    map[i + off] = at;
+                }
+                i += 5;
+                continue;
+            }
+        }
         if i + 4 < code.len()
             && !targets[i + 1]
             && !targets[i + 2]
