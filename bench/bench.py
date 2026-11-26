@@ -313,7 +313,8 @@ def render_markdown(res):
     lines.append(
         "\nThe JIT only covers functions whose parameters, locals, calls and "
         "return value are all integers (no division, no methods, no Vec/String). "
-        "Everything else keeps running in the interpreter.\n"
+        "It also excludes recursive call cycles because generated code has no "
+        "native stack-depth guard, so `fib` stays in the interpreter.\n"
     )
 
     lines.append("\n## End-to-end (source -> output)\n")
