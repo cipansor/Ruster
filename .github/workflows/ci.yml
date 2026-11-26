@@ -88,6 +88,8 @@ jobs:
         run: python3 tests/errors.py
       - name: JIT keeps recursive cycles in the interpreter
         run: python3 tests/jit_fallback.py
+      - name: Benchmark end-to-end arithmetic (no double counting)
+        run: python3 tests/bench_math.py
       - name: JIT must never change observable behaviour
         run: |
           for f in tests/programs/*.rs; do

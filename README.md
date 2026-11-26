@@ -19,12 +19,12 @@ Representative results (8 benchmark programs, 5 runs, median):
 
 | Metric | Result |
 |---|---|
-| Geometric-mean slowdown, interpreter only | **40.7x** vs native |
+| Geometric-mean slowdown, interpreter only | **40.3x** vs native |
 | Geometric-mean slowdown, with the JIT | **15.9x** vs native |
-| JIT-eligible integer kernels (10M loop, collatz) | **3.2x–3.9x** vs native |
+| JIT-eligible integer kernels (10M loop, collatz) | **3.1x–3.9x** vs native |
 | Recursive `fib` (not JIT-eligible) | 64x vs native (runs in the interpreter) |
-| `Vec`/index-heavy code (sieve, matmul, quicksort) | ~53x–84x vs native |
-| "Compile" phase (lex + parse + bytecode) | **~1 ms**, ~16 MB RSS (vs 74–126 ms, 90–112 MB for `rustc -O`) |
+| `Vec`/index-heavy code (sieve, matmul, quicksort) | ~52x–85x vs native |
+| "Compile" phase (lex + parse + bytecode) | **~1 ms**, ~16 MB RSS (vs 74–126 ms, 90–111 MB for `rustc -O`) |
 | Size | 5.0 MB for one binary that runs every program (native: 4.3 MB per program) |
 
 The JIT closes the gap from ~40x to ~15.9x, but only for functions it can
@@ -108,6 +108,9 @@ python3 tests/errors.py
 
 # Assert that recursive call cycles stay in the interpreter (x86-64 only)
 python3 tests/jit_fallback.py
+
+# Assert the benchmark's end-to-end time does not double-count the front-end
+python3 tests/bench_math.py
 ```
 
 `compare.py` runs all three engines and requires identical stdout and exit
@@ -115,7 +118,9 @@ codes. That cross-validates the JIT path against the interpreter path, not just
 against `rustc`. `jit_fallback.py` reads the JIT function list from `--stats`
 and checks that direct and mutual recursion are never JIT-compiled while an
 acyclic function still is; it also asserts that the benchmark's `fib` stays
-interpreted and that `loop_sum`/`collatz` compile.
+interpreted and that `loop_sum`/`collatz` compile. `bench_math.py` checks that
+the benchmark reporters use the full `bin/rust <file>` invocation as the
+end-to-end time, so the front-end is not counted twice.
 
 ### Running the benchmarks
 
@@ -266,34 +271,34 @@ and is therefore excluded, so it runs in the interpreter even with the JIT on.
 
 | program | rustc -O wall | rustc CPU | rustc RSS | native binary | Ruster front-end wall | front-end CPU | front-end RSS |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| hello | 74.0 ms | 89.4 ms | 89.7 MB | 4.3 MB | 1.0 ms | 0.9 ms | 15.5 MB |
-| fib | 78.2 ms | 92.2 ms | 90.6 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.6 MB |
-| loop_sum | 78.7 ms | 93.2 ms | 91.1 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.6 MB |
-| collatz | 78.7 ms | 94.0 ms | 92.2 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.8 MB |
-| sieve | 96.6 ms | 112.1 ms | 107.1 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.8 MB |
-| matmul | 126.2 ms | 141.6 ms | 107.4 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.8 MB |
-| quicksort | 106.9 ms | 121.9 ms | 107.2 MB | 4.3 MB | 1.2 ms | 1.1 ms | 15.9 MB |
-| strings | 120.2 ms | 136.6 ms | 111.5 MB | 4.3 MB | 1.1 ms | 1.0 ms | 16.0 MB |
+| hello | 74.0 ms | 89.1 ms | 89.6 MB | 4.3 MB | 1.1 ms | 0.9 ms | 15.5 MB |
+| fib | 76.6 ms | 91.4 ms | 90.5 MB | 4.3 MB | 1.0 ms | 1.0 ms | 15.8 MB |
+| loop_sum | 78.8 ms | 93.7 ms | 90.9 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.9 MB |
+| collatz | 79.5 ms | 94.2 ms | 93.1 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.9 MB |
+| sieve | 96.7 ms | 111.9 ms | 107.0 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.9 MB |
+| matmul | 125.6 ms | 141.3 ms | 107.6 MB | 4.3 MB | 1.1 ms | 1.1 ms | 15.9 MB |
+| quicksort | 104.2 ms | 119.3 ms | 107.4 MB | 4.3 MB | 1.2 ms | 1.1 ms | 15.9 MB |
+| strings | 119.0 ms | 135.1 ms | 111.4 MB | 4.3 MB | 1.1 ms | 1.0 ms | 15.9 MB |
 
 "Front-end" means lexing + parsing + bytecode generation + `const` evaluation,
 measured through `rust --compile-only`. No native code is produced at this
 stage.
 
-Building the interpreter once: `rustc -O` = **2.7 s wall, 7.7 s CPU
-(parallel), 259 MB RSS**.
+Building the interpreter once: `rustc -O` = **2.8 s wall, 7.7 s CPU
+(parallel), 262 MB RSS**.
 
 ### 4.2 Runtime phase (with the JIT)
 
 | program | native wall | native CPU | native CPU% | native RSS | Ruster (JIT) wall | CPU | CPU% | RSS | slowdown |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| hello | 0.9 ms | 0.8 ms | 91% | 15.5 MB | 1.0 ms | 1.0 ms | 93% | 15.5 MB | 1.2x |
-| fib | 3.0 ms | 2.9 ms | 97% | 15.6 MB | 192.5 ms | 192.3 ms | 100% | 15.6 MB | 64.0x |
-| loop_sum | 3.6 ms | 3.5 ms | 97% | 15.6 MB | 14.3 ms | 14.2 ms | 99% | 15.6 MB | 3.9x |
-| collatz | 22.7 ms | 22.5 ms | 99% | 15.6 MB | 71.6 ms | 71.5 ms | 100% | 15.8 MB | 3.2x |
-| sieve | 2.3 ms | 2.2 ms | 97% | 15.8 MB | 192.7 ms | 192.4 ms | 100% | 15.8 MB | 83.4x |
-| matmul | 1.9 ms | 1.8 ms | 94% | 15.8 MB | 160.3 ms | 160.0 ms | 100% | 15.8 MB | 84.4x |
-| quicksort | 4.0 ms | 3.9 ms | 98% | 15.9 MB | 215.2 ms | 215.0 ms | 100% | 15.9 MB | 53.5x |
-| strings | 1.3 ms | 1.2 ms | 92% | 16.0 MB | 14.8 ms | 14.6 ms | 99% | 16.0 MB | 11.5x |
+| hello | 0.9 ms | 0.8 ms | 91% | 15.5 MB | 1.0 ms | 0.9 ms | 93% | 15.5 MB | 1.2x |
+| fib | 3.0 ms | 2.9 ms | 97% | 15.6 MB | 192.9 ms | 192.7 ms | 100% | 15.8 MB | 64.4x |
+| loop_sum | 3.6 ms | 3.5 ms | 97% | 15.9 MB | 14.2 ms | 14.1 ms | 99% | 15.9 MB | 3.9x |
+| collatz | 22.8 ms | 22.6 ms | 99% | 15.9 MB | 70.4 ms | 70.1 ms | 100% | 15.9 MB | 3.1x |
+| sieve | 2.4 ms | 2.3 ms | 97% | 15.9 MB | 191.7 ms | 191.5 ms | 100% | 15.9 MB | 81.1x |
+| matmul | 1.9 ms | 1.8 ms | 95% | 15.9 MB | 159.7 ms | 159.4 ms | 100% | 15.9 MB | 84.8x |
+| quicksort | 4.1 ms | 4.0 ms | 98% | 15.9 MB | 213.9 ms | 213.7 ms | 100% | 15.9 MB | 51.9x |
+| strings | 1.2 ms | 1.1 ms | 94% | 15.9 MB | 14.5 ms | 14.3 ms | 99% | 15.9 MB | 12.1x |
 
 Interpreter CPU usage is ~99–100% (single-threaded). `rustc` can exceed 100%
 because it compiles in parallel.
@@ -302,35 +307,39 @@ because it compiles in parallel.
 
 | program | interpreter only | with JIT | JIT speedup | native | JIT vs native |
 |---|---:|---:|---:|---:|---:|
-| hello | 1.1 ms | 1.0 ms | 1.04x | 0.9 ms | 1.2x |
-| fib | 192.7 ms | 192.5 ms | **1.00x** | 3.0 ms | 64.0x |
-| loop_sum | 933.7 ms | 14.3 ms | 65.22x | 3.6 ms | 3.9x |
-| collatz | 1918.9 ms | 71.6 ms | 26.78x | 22.7 ms | 3.2x |
-| sieve | 193.6 ms | 192.7 ms | 1.00x | 2.3 ms | 83.4x |
-| matmul | 161.4 ms | 160.3 ms | 1.01x | 1.9 ms | 84.4x |
-| quicksort | 214.9 ms | 215.2 ms | 1.00x | 4.0 ms | 53.5x |
-| strings | 14.8 ms | 14.8 ms | 1.00x | 1.3 ms | 11.5x |
+| hello | 1.0 ms | 1.0 ms | 0.97x | 0.9 ms | 1.2x |
+| fib | 192.7 ms | 192.9 ms | **1.00x** | 3.0 ms | 64.4x |
+| loop_sum | 942.4 ms | 14.2 ms | 66.25x | 3.6 ms | 3.9x |
+| collatz | 1917.6 ms | 70.4 ms | 27.25x | 22.8 ms | 3.1x |
+| sieve | 192.0 ms | 191.7 ms | 1.00x | 2.4 ms | 81.1x |
+| matmul | 159.4 ms | 159.7 ms | 1.00x | 1.9 ms | 84.8x |
+| quicksort | 214.1 ms | 213.9 ms | 1.00x | 4.1 ms | 51.9x |
+| strings | 14.6 ms | 14.5 ms | 1.01x | 1.2 ms | 12.1x |
 
 `fib` shows **1.00x** because it is recursive and therefore not JIT-compiled:
-its "with JIT" time is the interpreter time. Only `loop_sum` (65x) and `collatz`
+its "with JIT" time is the interpreter time. Only `loop_sum` (66x) and `collatz`
 (27x) benefit. The JIT never changes observable behaviour; it only speeds up
 functions it is allowed to compile.
 
 ### 4.4 End-to-end (source -> output)
 
-| program | rustc compile + run | Ruster front-end + run | Ruster vs rustc |
+| program | rustc compile + run | Ruster source -> output | Ruster vs rustc |
 |---|---:|---:|---:|
-| hello | 74.9 ms | 2.0 ms | 36.8x faster |
-| fib | 81.2 ms | 193.7 ms | 2.39x slower |
-| loop_sum | 82.4 ms | 15.4 ms | 5.4x faster |
-| collatz | 101.4 ms | 72.7 ms | 1.4x faster |
-| sieve | 98.9 ms | 193.8 ms | 1.96x slower |
-| matmul | 128.1 ms | 161.4 ms | 1.26x slower |
-| quicksort | 111.0 ms | 216.4 ms | 1.95x slower |
-| strings | 121.5 ms | 15.9 ms | 7.6x faster |
+| hello | 74.9 ms | 1.0 ms | 73.9x faster |
+| fib | 79.6 ms | 192.9 ms | 2.42x slower |
+| loop_sum | 82.4 ms | 14.2 ms | 5.8x faster |
+| collatz | 102.3 ms | 70.4 ms | 1.5x faster |
+| sieve | 99.1 ms | 191.7 ms | 1.93x slower |
+| matmul | 127.5 ms | 159.7 ms | 1.25x slower |
+| quicksort | 108.3 ms | 213.9 ms | 1.98x slower |
+| strings | 120.2 ms | 14.5 ms | 8.3x faster |
 
-**Geometric-mean runtime slowdown: 15.9x with the JIT, 40.7x without.** On
-end-to-end time (compile + run) Ruster is about **1.9x faster than `rustc` on
+`Ruster source -> output` is a single `bin/rust <file>` invocation: the same
+process lexes, parses, compiles, and runs the program. The separate front-end
+measurement in 4.1 is for analysis only and is **not** added again here.
+
+**Geometric-mean runtime slowdown: 15.9x with the JIT, 40.3x without.** On
+end-to-end time (compile + run) Ruster is about **2.1x faster than `rustc` on
 the geometric mean**, winning 4 of 8 programs.
 
 Because `rustc -O` takes 74–126 ms per program, Ruster wins end-to-end for
@@ -343,9 +352,9 @@ benchmark. It loses on `fib` (interpreter-only) and on `Vec`/index-heavy code.
 |---|---:|---:|
 | hello binary | 4.3 MB | 5.0 MB (one binary for every program) |
 | quicksort binary | 4.3 MB | 5.0 MB |
-| RSS during compilation | 90–112 MB | ~16 MB |
+| RSS during compilation | 90–111 MB | ~16 MB |
 | Runtime RSS (hello) | 15.5 MB | 15.5 MB |
-| Runtime RSS (sieve, 1M bools) | 15.8 MB | 15.8 MB |
+| Runtime RSS (sieve, 1M bools) | 15.9 MB | 15.9 MB |
 
 Note: `Vec<bool>` in Ruster stores one 16-byte `Value` per element, not 1 bit or
 1 byte as in Rust. The native 4.3 MB is mostly statically linked Rust std;
@@ -356,18 +365,18 @@ per-program compilation.
 
 ## 5. Analysis: where does the gap come from?
 
-### 5.1 Interpreter (40.7x)
+### 5.1 Interpreter (40.3x)
 
 The classic causes: per-instruction dispatch, 16-byte tagged `Value`s, no
 register allocation, no inlining or vectorization, and `Rc`/`RefCell` for
-`Vec`/`String`. The 10-million-iteration `loop_sum` takes ~934 ms
-(≈93 ns/iteration) because each iteration executes ~7 bytecodes at ~10 ns each.
+`Vec`/`String`. The 10-million-iteration `loop_sum` takes ~942 ms
+(≈94 ns/iteration) because each iteration executes ~7 bytecodes at ~10 ns each.
 
-### 5.2 JIT-eligible integer kernels (3.2–3.9x)
+### 5.2 JIT-eligible integer kernels (3.1–3.9x)
 
 The JIT removes dispatch and tag checks: locals live in registers, arithmetic
 is direct `add/sub/imul`, and branches are `cmp+jcc`. For the two eligible
-kernels it is 27–65x faster than the interpreter.
+kernels it is 27–66x faster than the interpreter.
 
 The remaining 3–4x comes from:
 
@@ -376,7 +385,7 @@ The remaining 3–4x comes from:
 - **No register allocation for temporaries**, no common-subexpression
   elimination, and no inlining.
 - **No vectorization.** Native `loop_sum` takes 3.6 ms for 10 million iterations
-  (≈0.36 ns/iteration) because LLVM vectorizes it; our JIT takes 14.3 ms
+  (≈0.36 ns/iteration) because LLVM vectorizes it; our JIT takes 14.2 ms
   (≈1.4 ns/iteration) — only ~4x slower, but still not SIMD.
 - **Calls between JIT-compiled functions are not inlined**, and **recursive
   functions are excluded entirely** (no native stack-depth guard). This is why
@@ -387,7 +396,7 @@ For the eligible integer kernels this is already "close to native" in a
 meaningful sense: 3x, not 100x. `fib` remains the clearest example of what the
 recursion exclusion costs.
 
-### 5.3 `Vec`/`String` code (~53x–84x)
+### 5.3 `Vec`/`String` code (~52x–85x)
 
 Sieve, matmul, and quicksort spend their time in `Op::Index`/`Op::IndexSet`:
 checking the `Value::Vec(Rc<RefCell<Vec<Value>>>)` tag, dynamic borrow, bounds
@@ -523,6 +532,7 @@ tests/
   compare.py    three-engine differential runner
   errors.py     exit-code checks
   jit_fallback.py  asserts recursive cycles stay interpreted
+  bench_math.py    guards benchmark end-to-end arithmetic
 ```
 
 Source size: ~6,300 lines of Rust (compiler 2,009, parser 945, vm 872, jit 761,

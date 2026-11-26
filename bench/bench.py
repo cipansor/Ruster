@@ -50,11 +50,15 @@ def check_environment():
 check_environment()
 
 
-def _stdout_equal(src):
-    """JIT and interpreter must agree on stdout, not just on the exit code."""
-    a = subprocess.run([BIN, src], capture_output=True)
-    b = subprocess.run([BIN, "--no-jit", src], capture_output=True)
-    return a.stdout == b.stdout and a.returncode == b.returncode
+def _stdout_equal(src, exe):
+    """Native, JIT, and interpreter must agree on stdout and exit code."""
+    native = subprocess.run([exe], capture_output=True)
+    jit = subprocess.run([BIN, src], capture_output=True)
+    interp = subprocess.run([BIN, "--no-jit", src], capture_output=True)
+    return (
+        native.stdout == jit.stdout == interp.stdout
+        and native.returncode == jit.returncode == interp.returncode
+    )
 
 
 def rss_mb(kb):
@@ -181,6 +185,7 @@ def main():
             fe_rows = []
             for _ in range(args.compile_runs):
                 fe_rows.append(run_measured([BIN, "--compile-only", src]))
+            stdout_ok = _stdout_equal(src, exe)
 
         native_run = summarize(native_runs)
         jit_run = summarize(jit_runs)
@@ -209,7 +214,7 @@ def main():
             "code_match": (
                 native_run["codes"] == jit_run["codes"] == interp_run["codes"]
                 and all(code == 0 for code in native_run["codes"])
-                and _stdout_equal(src)
+                and stdout_ok
             ),
         }
         results["programs"].append(entry)
@@ -229,6 +234,10 @@ def main():
         f.write(md)
     print("\n" + md)
     print(f"\nwrote {RESULTS_JSON} and {RESULTS_MD}")
+    if not all(p["code_match"] for p in results["programs"]):
+        print("ERROR: benchmark stdout/exit-code parity failed", file=sys.stderr)
+        return 1
+    return 0
 
 
 def fmt_ms(s):
@@ -318,17 +327,22 @@ def render_markdown(res):
     )
 
     lines.append("\n## End-to-end (source -> output)\n")
-    lines.append("| program | rustc compile + run | Ruster front-end + run | ratio |")
+    lines.append("| program | rustc compile + run | Ruster source -> output | ratio |")
     lines.append("|---|---:|---:|---:|")
     for p in res["programs"]:
         native_total = p["native_compile"]["wall"] + p["native_run"]["wall"]
-        interp_total = p["front_end"]["wall"] + p.get("jit_run", p["interp_run"])["wall"]
+        interp_total = p.get("jit_run", p["interp_run"])["wall"]
         ratio = interp_total / native_total
         label = f"{ratio:.2f}x" if ratio >= 1 else f"1/{1/ratio:.1f} faster"
         lines.append(
             f"| {p['name']} | {fmt_ms(native_total)} ms | {fmt_ms(interp_total)} ms | "
             f"{label} |"
         )
+    lines.append(
+        "\n`Ruster source -> output` is a single `bin/rust <file>` invocation "
+        "(front-end + execution); the separate front-end measurement above is "
+        "for analysis only and is not added again.\n"
+    )
 
     geo = 1.0
     interp_geo = 1.0
@@ -342,10 +356,12 @@ def render_markdown(res):
         f"\nGeometric-mean runtime slowdown across the {n} programs: "
         f"**{geo:.1f}x** with the JIT, **{interp_geo:.1f}x** interpreter-only.\n"
     )
+    ok = all(p["code_match"] for p in res["programs"])
     lines.append(
-        "All programs produced identical exit codes under both engines; stdout "
-        "parity (native vs Ruster) is enforced by `tests/compare.py`. "
-        f"({all(p['code_match'] for p in res['programs'])}).\n"
+        "Parity: every benchmark program produced identical stdout and exit code "
+        "under native `rustc`, Ruster (JIT), and Ruster `--no-jit` "
+        f"({'verified' if ok else 'FAILED'}). `tests/compare.py` runs the same "
+        "three-way check for the feature fixtures.\n"
     )
 
     lines.append("## Binary / source size\n")
@@ -361,4 +377,4 @@ def render_markdown(res):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

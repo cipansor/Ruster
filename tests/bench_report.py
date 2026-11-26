@@ -28,7 +28,9 @@ def ratios(rows):
         native = r["native_run"]["wall"]
         ours = r["jit_run"]["wall"]
         e2e_native = r["native_compile"]["wall"] + native
-        e2e_ours = r["front_end"]["wall"] + ours
+        # `jit_run` is the full `bin/rust <file>` invocation, which already
+        # includes the front-end; adding `front_end` here would count it twice.
+        e2e_ours = ours
         out[r["name"]] = {
             "runtime": ours / native if native else float("nan"),
             "e2e": e2e_ours / e2e_native if e2e_native else float("nan"),
@@ -43,7 +45,8 @@ def ratios(rows):
 def main():
     baseline_path, current_path = sys.argv[1], sys.argv[2]
     base = ratios(load(baseline_path))
-    cur = ratios(load(current_path))
+    cur_rows = load(current_path)
+    cur = ratios(cur_rows)
 
     lines = [
         "## Benchmark",
@@ -66,11 +69,13 @@ def main():
     cur_runtime = geo([c["runtime"] for c in cur.values()])
     cur_e2e = geo([c["e2e"] for c in cur.values()])
     base_runtime = geo([b["runtime"] for b in base.values()])
+    parity = all(r.get("code_match", False) for r in cur_rows)
     lines += [
         "",
         f"- geometric mean runtime slowdown: **{cur_runtime:.1f}x** (baseline {base_runtime:.1f}x)",
         f"- geometric mean end-to-end (compile + run): **{cur_e2e:.2f}x** of rustc",
         f"- programs won end-to-end: **{sum(1 for c in cur.values() if c['e2e'] < 1)}** / {len(cur)}",
+        f"- parity (native / JIT / no-JIT stdout+exit): **{'verified' if parity else 'FAILED'}**",
         "",
     ]
 
@@ -83,6 +88,9 @@ def main():
 
     for name, delta in regressions:
         print(f"::warning::{name} is {delta:.2f}x slower than the committed baseline")
+
+    if not parity:
+        print("::error::benchmark stdout/exit-code parity failed")
 
 
 if __name__ == "__main__":
