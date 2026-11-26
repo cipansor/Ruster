@@ -74,8 +74,8 @@ Ruster jit: no functions were eligible
 
 $ bin/rust --stats bench/programs/fib.rs
 fib(30) = 832040
-Ruster stats: front-end 0.037 ms, run 8.310 ms
-Ruster jit: 1 function(s): fib
+Ruster stats: front-end 0.081 ms, run 194.586 ms
+Ruster jit: no functions were eligible
 
 $ bin/rust --compile-only hello.rs
 Ruster front-end: 0.019 ms | 1 function(s), 7 instruction(s), 2 constant(s), 1 template(s), 0 global(s)
@@ -114,7 +114,8 @@ python3 tests/jit_fallback.py
 codes. That cross-validates the JIT path against the interpreter path, not just
 against `rustc`. `jit_fallback.py` reads the JIT function list from `--stats`
 and checks that direct and mutual recursion are never JIT-compiled while an
-acyclic function still is.
+acyclic function still is; it also asserts that the benchmark's `fib` stays
+interpreted and that `loop_sum`/`collatz` compile.
 
 ### Running the benchmarks
 
@@ -177,10 +178,12 @@ vm.rs        -> frame-stack interpreter; calls JIT-compiled code when possible
 
 Every encoder is written by hand; there is no Cranelift or LLVM.
 
-**Eligibility (checked per function, fixed point over the call graph):**
+**Eligibility (checked per function, with call cycles excluded):**
 
 - all parameters and the return type are integer types;
 - at most 6 parameters and 5 locals;
+- not on a call cycle (direct or mutual recursion): generated code has no
+  native stack-depth guard;
 - the bytecode contains only `Imm`, `Load`, `Store`, `Pop`, `FoldImm`, `Bin`
   (`+ - * & | ^ << >> == != < <= > >=`), `Un(Neg)`, all jump/fusion variants,
   `Call` to another eligible function, and `Return`;
@@ -198,7 +201,7 @@ Every encoder is written by hand; there is no Cranelift or LLVM.
   once all offsets are known.
 - Calls take arguments from the operand stack into SysV registers, then
   `mov rax, <ptr>; call rax`. Function addresses are patched after every page is
-  allocated, so recursion and cross-calls work.
+  allocated, so cross-calls work.
 - Frames are always 16-byte aligned, so calls obey the SysV ABI.
 - Code is written to anonymous `mmap` pages, then `mprotect(PROT_READ|PROT_EXEC)`
   after finalization (W^X). No page stays writable and executable.
@@ -219,8 +222,9 @@ longer touches 16-byte `Value`s. Methods without a packed path (`sort`,
 `Rc` identity and mutation stay correct. Measured effect: sieve 1M RSS drops
 from 18.0 MB to 15.6 MB, and the index loop gets slightly faster.
 
-Consequence: `fib`, integer loops, and collatz run as machine code;
-sieve/matmul/quicksort stay in the interpreter because they index `Vec`.
+Consequence: JIT-eligible integer kernels (such as `loop_sum` and `collatz`)
+run as machine code; `fib` (recursive) and `Vec`/index-heavy code
+(sieve, matmul, quicksort) stay in the interpreter.
 
 ---
 
