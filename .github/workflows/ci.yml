@@ -143,11 +143,16 @@ jobs:
           rustc --edition 2024 -O ruster/src/main.rs -o bin/rust
       - name: Baseline (from the committed results)
         run: git show HEAD:bench/results.json > /tmp/baseline.json
+      - name: Remove committed reports (never publish stale data)
+        run: rm -f bench/results.json bench/results.md
       - name: Run benchmarks
+        id: bench
         run: python3 bench/bench.py --runs 5 --compile-runs 5
       - name: Compare with baseline and publish summary
+        if: always() && steps.bench.outcome != 'skipped' && hashFiles('bench/results.json') != ''
         run: python3 tests/bench_report.py /tmp/baseline.json bench/results.json
       - name: Upload benchmark report
+        if: always() && steps.bench.outcome != 'skipped' && hashFiles('bench/results.json') != ''
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: bench-results

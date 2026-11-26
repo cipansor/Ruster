@@ -69,7 +69,7 @@ The JIT only covers functions whose parameters, locals, calls and return value a
 
 Geometric-mean runtime slowdown across the 8 programs: **15.9x** with the JIT, **40.3x** interpreter-only.
 
-Parity: every benchmark program produced identical stdout and exit code under native `rustc`, Ruster (JIT), and Ruster `--no-jit` (verified). `tests/compare.py` runs the same three-way check for the feature fixtures.
+Parity: native `rustc`, Ruster (JIT), and Ruster `--no-jit` produced identical stdout and exit code for every benchmark program. `tests/compare.py` runs the same three-way check for the feature fixtures.
 
 ## Binary / source size
 

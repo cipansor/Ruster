@@ -93,7 +93,8 @@
       "slowdown": 1.1859605238495374,
       "interp_slowdown": 1.146350882777851,
       "jit_speedup": 0.9666012145639414,
-      "code_match": true
+      "code_match": true,
+      "native_parity": true
     },
     {
       "name": "fib",
@@ -173,7 +174,8 @@
       "slowdown": 64.38229888149107,
       "interp_slowdown": 64.32224308255641,
       "jit_speedup": 0.9990672001469657,
-      "code_match": true
+      "code_match": true,
+      "native_parity": true
     },
     {
       "name": "loop_sum",
@@ -253,7 +255,8 @@
       "slowdown": 3.9314022704607567,
       "interp_slowdown": 260.46830371613737,
       "jit_speedup": 66.25328211086644,
-      "code_match": true
+      "code_match": true,
+      "native_parity": true
     },
     {
       "name": "collatz",
@@ -333,7 +336,8 @@
       "slowdown": 3.0917061860056623,
       "interp_slowdown": 84.24102875686924,
       "jit_speedup": 27.247423813484893,
-      "code_match": true
+      "code_match": true,
+      "native_parity": true
     },
     {
       "name": "sieve",
@@ -413,7 +417,8 @@
       "slowdown": 81.13524781245246,
       "interp_slowdown": 81.26389615441873,
       "jit_speedup": 1.0015856036116837,
-      "code_match": true
+      "code_match": true,
+      "native_parity": true
     },
     {
       "name": "matmul",
@@ -493,7 +498,8 @@
       "slowdown": 84.81061261804942,
       "interp_slowdown": 84.64011669901515,
       "jit_speedup": 0.9979896865053657,
-      "code_match": true
+      "code_match": true,
+      "native_parity": true
     },
     {
       "name": "quicksort",
@@ -573,7 +579,8 @@
       "slowdown": 51.9352908018056,
       "interp_slowdown": 51.973114792943385,
       "jit_speedup": 1.0007282907355257,
-      "code_match": true
+      "code_match": true,
+      "native_parity": true
     },
     {
       "name": "strings",
@@ -653,7 +660,8 @@
       "slowdown": 12.06270337023634,
       "interp_slowdown": 12.148922832326104,
       "jit_speedup": 1.00714760692056,
-      "code_match": true
+      "code_match": true,
+      "native_parity": true
     }
   ]
 }

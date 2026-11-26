@@ -47,9 +47,6 @@ def check_environment():
         )
 
 
-check_environment()
-
-
 def _stdout_equal(src, exe):
     """Native, JIT, and interpreter must agree on stdout and exit code."""
     native = subprocess.run([exe], capture_output=True)
@@ -132,6 +129,7 @@ def main():
         print(md)
         return
 
+    check_environment()
     only = set(args.only.split(",")) if args.only else None
     cases = [c for c in CASES if not only or c[0] in only]
 
@@ -211,6 +209,7 @@ def main():
             "jit_speedup": interp_run["wall"] / jit_run["wall"]
             if jit_run["wall"] > 0
             else None,
+            "native_parity": stdout_ok,
             "code_match": (
                 native_run["codes"] == jit_run["codes"] == interp_run["codes"]
                 and all(code == 0 for code in native_run["codes"])
@@ -356,12 +355,23 @@ def render_markdown(res):
         f"\nGeometric-mean runtime slowdown across the {n} programs: "
         f"**{geo:.1f}x** with the JIT, **{interp_geo:.1f}x** interpreter-only.\n"
     )
-    ok = all(p["code_match"] for p in res["programs"])
+    vals = [p.get("native_parity") for p in res["programs"]]
+    failed = [p["name"] for p in res["programs"] if p.get("native_parity") is False]
+    if all(v is True for v in vals):
+        parity = (
+            "Parity: native `rustc`, Ruster (JIT), and Ruster `--no-jit` "
+            "produced identical stdout and exit code for every benchmark program."
+        )
+    elif failed:
+        parity = f"Parity FAILED for: {', '.join(failed)}."
+    else:
+        parity = (
+            "Parity: not recorded in this report (legacy format); re-run "
+            "`bench.py` to verify native stdout."
+        )
     lines.append(
-        "Parity: every benchmark program produced identical stdout and exit code "
-        "under native `rustc`, Ruster (JIT), and Ruster `--no-jit` "
-        f"({'verified' if ok else 'FAILED'}). `tests/compare.py` runs the same "
-        "three-way check for the feature fixtures.\n"
+        parity + " `tests/compare.py` runs the same three-way check for the "
+        "feature fixtures.\n"
     )
 
     lines.append("## Binary / source size\n")
