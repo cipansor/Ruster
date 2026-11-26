@@ -21,7 +21,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROGRAMS = os.path.join(ROOT, "bench", "programs")
-SRC = os.path.join(ROOT, "Ruster", "src", "main.rs")
+SRC = os.path.join(ROOT, "ruster", "src", "main.rs")
 BIN = os.path.join(ROOT, "bin", "rust")
 RESULTS_JSON = os.path.join(ROOT, "bench", "results.json")
 RESULTS_MD = os.path.join(ROOT, "bench", "results.md")
