@@ -352,18 +352,28 @@ def render_markdown(res):
         "for analysis only and is not added again.\n"
     )
 
+    valid = [p for p in res["programs"] if p.get("timed_ok") is not False]
     geo = 1.0
     interp_geo = 1.0
-    for p in res["programs"]:
+    for p in valid:
         geo *= max(p["slowdown"], 1e-9)
         interp_geo *= max(p.get("interp_slowdown") or p["slowdown"], 1e-9)
-    n = len(res["programs"])
-    geo = geo ** (1.0 / n)
-    interp_geo = interp_geo ** (1.0 / n)
-    lines.append(
-        f"\nGeometric-mean runtime slowdown across the {n} programs: "
-        f"**{geo:.1f}x** with the JIT, **{interp_geo:.1f}x** interpreter-only.\n"
-    )
+    n = len(valid)
+    if n:
+        geo = geo ** (1.0 / n)
+        interp_geo = interp_geo ** (1.0 / n)
+        lines.append(
+            f"\nGeometric-mean runtime slowdown across the {n} programs: "
+            f"**{geo:.1f}x** with the JIT, **{interp_geo:.1f}x** interpreter-only.\n"
+        )
+    else:
+        lines.append("\nNo program had a complete set of timed runs.\n")
+    excluded = [p["name"] for p in res["programs"] if p.get("timed_ok") is False]
+    if excluded:
+        lines.append(
+            f"Excluded from the geometric mean (timed run failed): "
+            f"{', '.join(excluded)}.\n"
+        )
     timed_vals = [p.get("timed_ok") for p in res["programs"]]
     timed_failed = [p["name"] for p in res["programs"] if p.get("timed_ok") is False]
     if all(v is True for v in timed_vals):

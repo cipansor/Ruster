@@ -104,11 +104,14 @@ def report_summary(data):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(data, f)
         path = f.name
+    env = os.environ.copy()
+    env.pop("GITHUB_STEP_SUMMARY", None)
     try:
         return subprocess.run(
             [sys.executable, os.path.join(ROOT, "tests", "bench_report.py"), path, path],
             capture_output=True,
             text=True,
+            env=env,
         )
     finally:
         os.unlink(path)
@@ -205,6 +208,8 @@ def main():
         timed_bad,
         [
             "Timed runs FAILED for: x (nonzero exit in a measured run; those timings are invalid).",
+            "No program had a complete set of timed runs.",
+            "Excluded from the geometric mean (timed run failed): x.",
             "Parity: native `rustc`, Ruster (JIT), and Ruster `--no-jit` "
             "produced identical stdout and exit code for every benchmark program.",
         ],
@@ -212,13 +217,19 @@ def main():
         failed,
     )
 
-    # 7. The CI summary must distinguish the two checks too.
+    # 7. The CI summary must distinguish the two checks too, and must exclude
+    #    the failed timing from the geometric means and win count.
     out = report_summary(fixture(timed_ok=False))
     failed = expect(
         out.stdout,
         [
+            "| x :x: | — | — | — | — |",
+            "- geometric mean runtime slowdown: **n/a** (baseline n/a)",
+            "- geometric mean end-to-end (compile + run): **n/a** of rustc",
+            "- programs won end-to-end: **0** / 0",
             "- timed runs (all engines exited 0): **FAILED (x)**",
             "- captured parity (native / JIT / no-JIT stdout+exit): **verified**",
+            "- :x: timed run failed for: **x**; those timings are excluded from the geometric means and win count.",
             "::error::benchmark timed runs failed for: x",
         ],
         "bench_report timed failure",
@@ -235,6 +246,23 @@ def main():
         "bench_report parity failure",
         failed,
     )
+
+    # 8. The synthetic runs must never append to the real CI job summary.
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as sf:
+        summary_path = sf.name
+    previous = os.environ.get("GITHUB_STEP_SUMMARY")
+    os.environ["GITHUB_STEP_SUMMARY"] = summary_path
+    try:
+        report_summary(fixture(timed_ok=False))
+        if os.path.getsize(summary_path) != 0:
+            print("FAIL report_summary wrote to the real GITHUB_STEP_SUMMARY")
+            failed += 1
+    finally:
+        if previous is None:
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        else:
+            os.environ["GITHUB_STEP_SUMMARY"] = previous
+        os.unlink(summary_path)
 
     if failed == 0:
         print("ok   benchmark arithmetic, engine choice, and both parity checks")

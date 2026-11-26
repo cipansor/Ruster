@@ -22,6 +22,10 @@ def geo(values):
     return math.exp(sum(math.log(v) for v in values) / len(values))
 
 
+def fmt_x(value, digits):
+    return "n/a" if value != value else f"{value:.{digits}f}x"
+
+
 def ratios(rows):
     out = {}
     for r in rows:
@@ -47,6 +51,7 @@ def main():
     base = ratios(load(baseline_path))
     cur_rows = load(current_path)
     cur = ratios(cur_rows)
+    timed_bad = {r["name"] for r in cur_rows if r.get("timed_ok") is False}
 
     lines = [
         "## Benchmark",
@@ -56,6 +61,9 @@ def main():
     ]
     regressions = []
     for name, c in cur.items():
+        if name in timed_bad:
+            lines.append(f"| {name} :x: | — | — | — | — |")
+            continue
         b = base.get(name)
         delta = c["runtime"] / b["runtime"] if b and b["runtime"] else float("nan")
         flag = ""
@@ -66,9 +74,11 @@ def main():
             f"| {name} | {c['ms']:.1f} ms | {c['runtime']:.1f}x | {delta:.2f}x{flag} | {c['rss']:.2f}x |"
         )
 
-    cur_runtime = geo([c["runtime"] for c in cur.values()])
-    cur_e2e = geo([c["e2e"] for c in cur.values()])
-    base_runtime = geo([b["runtime"] for b in base.values()])
+    valid = [name for name in cur if name in base and name not in timed_bad]
+    cur_runtime = geo([cur[n]["runtime"] for n in valid]) if valid else float("nan")
+    cur_e2e = geo([cur[n]["e2e"] for n in valid]) if valid else float("nan")
+    base_runtime = geo([base[n]["runtime"] for n in valid]) if valid else float("nan")
+    wins = sum(1 for n in valid if cur[n]["e2e"] < 1)
     vals = [r.get("native_parity") for r in cur_rows]
     parity_failed = [r["name"] for r in cur_rows if r.get("native_parity") is False]
     if all(v is True for v in vals):
@@ -87,13 +97,18 @@ def main():
         timed = "not recorded (legacy report)"
     lines += [
         "",
-        f"- geometric mean runtime slowdown: **{cur_runtime:.1f}x** (baseline {base_runtime:.1f}x)",
-        f"- geometric mean end-to-end (compile + run): **{cur_e2e:.2f}x** of rustc",
-        f"- programs won end-to-end: **{sum(1 for c in cur.values() if c['e2e'] < 1)}** / {len(cur)}",
+        f"- geometric mean runtime slowdown: **{fmt_x(cur_runtime, 1)}** (baseline {fmt_x(base_runtime, 1)})",
+        f"- geometric mean end-to-end (compile + run): **{fmt_x(cur_e2e, 2)}** of rustc",
+        f"- programs won end-to-end: **{wins}** / {len(valid)}",
         f"- timed runs (all engines exited 0): **{timed}**",
         f"- captured parity (native / JIT / no-JIT stdout+exit): **{parity}**",
-        "",
     ]
+    if timed_bad:
+        lines.append(
+            f"- :x: timed run failed for: **{', '.join(sorted(timed_bad))}**; "
+            "those timings are excluded from the geometric means and win count."
+        )
+    lines.append("")
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     text = "\n".join(lines) + "\n"
