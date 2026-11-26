@@ -1,5 +1,7 @@
 # Ruster — interpreter Rust + JIT x86-64 dalam satu binary, tanpa cargo
 
+[![CI](https://github.com/cipansor/Ruster/actions/workflows/ci.yml/badge.svg)](https://github.com/cipansor/Ruster/actions/workflows/ci.yml)
+
 > **Ruster** adalah singkatan dari **Rust Interpreter** — nama proyeknya, bukan
 > nama bahasa yang diinterpretasi.
 
